@@ -1,23 +1,18 @@
 #!/usr/bin/env python3
-import eventlet
-eventlet.monkey_patch()
-
 import os
 import pickle
 import traceback
-from datetime import date
+import sqlite3
+import smtplib
+from datetime import date, datetime
+import pytz
 import numpy as np
 import openai
-from flask import Flask, request, jsonify, send_from_directory
-from flask_cors import CORS
-from flask_socketio import SocketIO, join_room, emit
+from flask import Flask, request, jsonify, render_template
+from flask_cors import CORS, cross_origin
 from dotenv import load_dotenv
 from fuzzywuzzy import fuzz
-import logging
-
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from email.mime.text import MIMEText
 
 # ─── Initialise ──────────────────────────────────────────────────────────────
 load_dotenv()
@@ -25,17 +20,33 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 if not openai.api_key:
     raise RuntimeError("OPENAI_API_KEY not set in .env")
 
-# ─── Flask & SocketIO setup ───────────────────────────────────────────────────
-app = Flask(__name__, static_folder='static', static_url_path='/static')
-app.config['SECRET_KEY'] = os.getenv("SECRET_KEY", "CHANGE_ME")
-CORS(app, resources={r"/*": {"origins": "*"}})
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+# SMTP configuration for alerts
+SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
+SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
+SMTP_USER = os.getenv("SMTP_USER")
+SMTP_PASS = os.getenv("SMTP_PASS")
+MODERATOR_EMAIL = os.getenv("MODERATOR_EMAIL", "registrar@morehousemail.org.uk")
 
-# Track which sessions are in human-override
-override_states = {}  # session_id → bool
-sessions = {}  # session_id → {status, lastMessage}
+# ─── SQLite Database Setup ───────────────────────────────────────────────────
+def init_db():
+    conn = sqlite3.connect('/app/flag.db')
+    c = conn.cursor()
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS chat_sessions (
+            session_id TEXT PRIMARY KEY,
+            question TEXT NOT NULL,
+            bot_response TEXT,
+            human_response TEXT,
+            status TEXT NOT NULL DEFAULT 'bot',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    conn.commit()
+    conn.close()
 
-# ─── Static QAs and Page Links ───────────────────────────────────────────────
+init_db()
+
+# ─── URL lookup (unchanged) ───────────────────────────────────────────────────
 PAGE_LINKS = {
     "home": "https://www.morehouse.org.uk/",
     "homepage": "https://www.morehouse.org.uk/",
@@ -119,9 +130,10 @@ PAGE_LINKS = {
     "houses": "https://www.morehouse.org.uk/our-school/houses/",
     "co-curricular": "https://www.morehouse.org.uk/beyond-the-classroom/co-curricular-programme/",
     "sport": "https://www.morehouse.org.uk/beyond-the-classroom/sport/",
-    "faith life": "https://www.morehouse.org.uk/beyond-the-classroom/faith-life/"
+    "faith life": "https://www.morehouse.org.uk/beyond-the-classroom/faith-life/",
 }
 
+# ─── Human labels for fallback links ────────────────────────────────────────
 URL_LABELS = {
     PAGE_LINKS["enquiry"]: "More about Enquiries",
     PAGE_LINKS["fees"]: "More about Fees",
@@ -155,6 +167,7 @@ URL_LABELS = {
     "https://www.morehouse.org.uk/information/school-policies/": "More about Policies",
 }
 
+# ─── Static QAs (unchanged) ──────────────────────────────────────────────────
 STATIC_QAS = {
     "enquiry": (
         "Please complete our enquiry form and we will tailor a prospectus exactly for you and your child.",
@@ -956,25 +969,60 @@ STATIC_QAS = {
 }
 
 # ─── Load embeddings & metadata ───────────────────────────────────────────────
-with open("embeddings.pkl", "rb") as f:
+with open("/app/embeddings.pkl", "rb") as f:
     embeddings = np.stack(pickle.load(f), axis=0)
-with open("metadata.pkl", "rb") as f:
+with open("/app/metadata.pkl", "rb") as f:
     metadata = pickle.load(f)
 
 EMB_MODEL = "text-embedding-3-small"
 CHAT_MODEL = "gpt-3.5-turbo"
 
+# ─── System prompt ────────────────────────────────────────────────────────────
 today = date.today().isoformat()
 system_prompt = (
     f"You are a friendly, professional assistant for More House School.\n"
     f"Today's date is {today}.\n"
-    "Begin with 'Thank you for your question!' and end with "
-    "'Anything else I can help you with today?'.\n"
+    "Begin with 'Thank you for your question!' and end with 'Anything else I can help you with today?'.\n"
     "If you do not know the answer, say 'I'm sorry, I don't have that information.'\n"
     "Use British spelling."
 )
 
-# ─── Utility functions ──────────────────────────────────────────────────────
+# ─── Human takeover triggers ──────────────────────────────────────────────────
+SENSITIVE_KEYWORDS = ["bullying", "emergency", "harassment", "safeguarding issue", "complaint"]
+def needs_human_takeover(question, sim_score=None):
+    now = datetime.now(pytz.timezone("Europe/London"))
+    hour = now.hour
+    # Scheduled intervention: 9am–5pm BST
+    scheduled = 9 <= hour < 17
+    # Keyword trigger
+    keyword_trigger = any(keyword in question.lower() for keyword in SENSITIVE_KEYWORDS)
+    # Low confidence trigger (if sim_score provided)
+    low_confidence = sim_score is not None and sim_score < 0.7
+    return scheduled or keyword_trigger or low_confidence
+
+# ─── Send email alert ─────────────────────────────────────────────────────────
+def send_alert_email(question, session_id):
+    if not all([SMTP_SERVER, SMTP_USER, SMTP_PASS, MODERATOR_EMAIL]):
+        print("SMTP configuration missing; skipping email alert")
+        return
+    msg = MIMEText(
+        f"A new query requires human review.\n\nQuestion: {question}\nSession ID: {session_id}\n"
+        f"Please review at https://more-house-human.onrender.com/review"
+    )
+    msg["Subject"] = "More House Chatbot: Human Review Required"
+    msg["From"] = SMTP_USER
+    msg["To"] = MODERATOR_EMAIL
+    try:
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASS)
+            server.send_message(msg)
+    except Exception as e:
+        print(f"Failed to send email alert: {e}")
+
+app = Flask(__name__)
+CORS(app, resources={r"/ask": {"origins": "*"}, r"/status": {"origins": "*"}, r"/takeover": {"origins": "*"}})
+
 def cosine_similarities(matrix, vector):
     dot = matrix @ vector
     norms = np.linalg.norm(matrix, axis=1) * np.linalg.norm(vector)
@@ -986,7 +1034,7 @@ def remove_bullets(text):
         for line in text.split("\n")
     )
 
-def format_response(ans):
+def format_response(ans, is_human=False):
     footer = "Anything else I can help you with today?"
     ans = ans.replace(footer, "").strip()
     sents, paras, curr = ans.split(". "), [], []
@@ -1000,62 +1048,121 @@ def format_response(ans):
             curr = []
     if curr:
         paras.append(". ".join(curr) + ".")
-    if not paras or not paras[0].startswith("Thank you for your question"):
+    if not is_human and (not paras or not paras[0].startswith("Thank you for your question")):
         paras.insert(0, "Thank you for your question!")
     paras.append(footer)
     return "\n\n".join(paras)
 
-# ─── HTTP endpoint for automated “ask” ──────────────────────────────────────
 @app.route("/", methods=["GET"])
 def home():
-    return "PEN.ai is running."
+    return render_template("index.html")
 
 @app.route("/ask", methods=["POST"])
+@cross_origin()
 def ask():
     try:
         data = request.get_json(force=True)
         question = data.get("question", "").strip()
+        session_id = data.get("session_id", str(uuid.uuid4()))
         if not question:
             return jsonify(error="No question provided"), 400
 
         key = question.lower().rstrip("?")
 
+        # Check existing session
+        conn = sqlite3.connect('/app/flag.db')
+        c = conn.cursor()
+        c.execute("SELECT status, human_response, bot_response FROM chat_sessions WHERE session_id = ?", (session_id,))
+        session = c.fetchone()
+        if session and session[0] == "human" and session[1]:
+            conn.close()
+            return jsonify(
+                answer=format_response(session[1], is_human=True),
+                url=None,
+                link_label=None,
+                source="human",
+                session_id=session_id
+            ), 200
+        elif session and session[0] == "pending":
+            conn.close()
+            return jsonify(
+                answer="Your question has been flagged for human review. A member of our team will respond soon.",
+                url=None,
+                link_label=None,
+                source="system",
+                session_id=session_id
+            ), 200
+
         # 1) Exact static
         if key in STATIC_QAS:
             raw, url, label = STATIC_QAS[key]
+            c.execute(
+                "INSERT OR REPLACE INTO chat_sessions (session_id, question, bot_response, status) VALUES (?, ?, ?, ?)",
+                (session_id, question, raw, "bot")
+            )
+            conn.commit()
+            conn.close()
             return jsonify(
                 answer=format_response(remove_bullets(raw)),
                 url=url,
-                link_label=label
+                link_label=label,
+                source="bot",
+                session_id=session_id
             ), 200
 
         # 2) Fuzzy static
         for sk, (raw, url, label) in STATIC_QAS.items():
             if fuzz.partial_ratio(sk, key) > 80:
+                c.execute(
+                    "INSERT OR REPLACE INTO chat_sessions (session_id, question, bot_response, status) VALUES (?, ?, ?, ?)",
+                    (session_id, question, raw, "bot")
+                )
+                conn.commit()
+                conn.close()
                 return jsonify(
                     answer=format_response(remove_bullets(raw)),
                     url=url,
-                    link_label=label
+                    link_label=label,
+                    source="bot",
+                    session_id=session_id
                 ), 200
 
-        # 3) Welcome
+        # 3) Welcome (custom — no “Thank you for your question!”)
         if question == "__welcome__":
             raw = (
                 "Hi there! Ask me anything about More House School.\n\n"
                 "We tailor our prospectus to your enquiry. For more details, visit below.\n\n"
                 "Anything else I can help you with today?"
             )
+            c.execute(
+                "INSERT OR REPLACE INTO chat_sessions (session_id, question, bot_response, status) VALUES (?, ?, ?, ?)",
+                (session_id, question, raw, "bot")
+            )
+            conn.commit()
+            conn.close()
             return jsonify(
                 answer=remove_bullets(raw),
                 url=PAGE_LINKS["enquiry"],
-                link_label="Enquire now"
+                link_label="Enquire now",
+                source="bot",
+                session_id=session_id
             ), 200
 
         # 4) Guard “how many…”
         if key.startswith("how many"):
+            raw = "I'm sorry, I don't have that information."
+            c.execute(
+                "INSERT OR REPLACE INTO chat_sessions (session_id, question, bot_response, status) VALUES (?, ?, ?, ?)",
+                (session_id, question, raw, "bot")
+            )
+            conn.commit()
+            conn.close()
             return jsonify(
-                answer=format_response("I'm sorry, I don't have that information."),
-                url=None
+                answer=format_response(raw),
+                url=None,
+                link_label=None,
+                source="bot",
+                session_id=session_id
             ), 200
 
         # 5) Keyword → URL
@@ -1071,8 +1178,9 @@ def ask():
         emb = openai.embeddings.create(model=EMB_MODEL, input=question)
         q_vec = np.array(emb.data[0].embedding, dtype="float32")
         sims = cosine_similarities(embeddings, q_vec)
-        top_idxs = sims.argsort()[-20:][::-1]
-        contexts = [metadata[i]["text"] for i in top_idxs]
+        top_idx = sims.argmax()
+        top_sim = sims[top_idx]
+        contexts = [metadata[i]["text"] for i in sims.argsort()[-20:][::-1]]
         prompt = "Use these passages:\n\n" + "\n---\n".join(contexts)
         prompt += f"\n\nQuestion: {question}\nAnswer:"
         chat = openai.chat.completions.create(
@@ -1083,190 +1191,146 @@ def ask():
             ],
         )
         raw = chat.choices[0].message.content
-        answer = format_response(remove_bullets(raw))
 
-        # 7) Fallback URL + human label
-        if not relevant_url and top_idxs.size:
-            relevant_url = metadata[top_idxs[0]].get("url")
+        # Check for human takeover
+        if needs_human_takeover(question, top_sim):
+            c.execute(
+                "INSERT OR REPLACE INTO chat_sessions (session_id, question, bot_response, status) VALUES (?, ?, ?, ?)",
+                (session_id, question, raw, "pending")
+            )
+            conn.commit()
+            conn.close()
+            send_alert_email(question, session_id)
+            return jsonify(
+                answer="Your question has been flagged for human review. A member of our team will respond soon.",
+                url=None,
+                link_label=None,
+                source="system",
+                session_id=session_id
+            ), 200
+
+        # Store bot response
+        c.execute(
+            "INSERT OR REPLACE INTO chat_sessions (session_id, question, bot_response, status) VALUES (?, ?, ?, ?)",
+            (session_id, question, raw, "bot")
+        )
+        conn.commit()
+        conn.close()
+
+        answer = format_response(remove_bullets(raw))
+        if not relevant_url and top_idx:
+            relevant_url = metadata[top_idx].get("url")
         link_label = URL_LABELS.get(relevant_url)
 
         return jsonify(
             answer=answer,
             url=relevant_url,
-            link_label=link_label
+            link_label=link_label,
+            source="bot",
+            session_id=session_id
         ), 200
 
     except Exception as e:
-        logger.error(f"Error in /ask: {str(e)}")
         traceback.print_exc()
         return jsonify(error=str(e)), 500
 
-# ─── SocketIO events for live chat & human takeover ─────────────────────────
-@socketio.on("connect")
-def on_connect():
-    logger.info(f"New connection: {request.sid}")
+@app.route("/takeover", methods=["POST"])
+@cross_origin()
+def takeover():
+    try:
+        data = request.get_json(force=True)
+        session_id = data.get("session_id")
+        if not session_id:
+            return jsonify(error="No session_id provided"), 400
+        conn = sqlite3.connect('/app/flag.db')
+        c = conn.cursor()
+        c.execute("SELECT question FROM chat_sessions WHERE session_id = ?", (session_id,))
+        session = c.fetchone()
+        if not session:
+            conn.close()
+            return jsonify(error="Session not found"), 404
+        c.execute("UPDATE chat_sessions SET status = ? WHERE session_id = ?", ("pending", session_id))
+        conn.commit()
+        conn.close()
+        send_alert_email(session[0], session_id)
+        return jsonify(
+            answer="Your request for human assistance has been received. A member of our team will respond soon.",
+            url=None,
+            link_label=None,
+            source="system",
+            session_id=session_id
+        ), 200
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify(error=str(e)), 500
 
-@socketio.on("disconnect")
-def on_disconnect():
-    logger.info(f"Disconnected: {request.sid}")
+@app.route("/status", methods=["POST"])
+@cross_origin()
+def status():
+    try:
+        data = request.get_json(force=True)
+        session_id = data.get("session_id")
+        if not session_id:
+            return jsonify(error="No session_id provided"), 400
+        conn = sqlite3.connect('/app/flag.db')
+        c = conn.cursor()
+        c.execute("SELECT status, human_response, bot_response FROM chat_sessions WHERE session_id = ?", (session_id,))
+        session = c.fetchone()
+        conn.close()
+        if not session:
+            return jsonify(error="Session not found"), 404
+        status, human_response, bot_response = session
+        if status == "human" and human_response:
+            return jsonify(
+                answer=format_response(human_response, is_human=True),
+                url=None,
+                link_label=None,
+                source="human",
+                session_id=session_id
+            ), 200
+        elif status == "pending":
+            return jsonify(
+                answer="Your question is still under human review. Please check back soon.",
+                url=None,
+                link_label=None,
+                source="system",
+                session_id=session_id
+            ), 200
+        else:
+            return jsonify(
+                answer=format_response(bot_response),
+                url=None,
+                link_label=None,
+                source="bot",
+                session_id=session_id
+            ), 200
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify(error=str(e)), 500
 
-@socketio.on("join")
-def on_join(data):
-    role = data.get("role", "user")
-    sid = data.get("sessionId")
-    logger.info(f"Join event: sid={request.sid}, role={role}, sessionId={sid}")
-    
-    if role == "agent":
-        join_room("agents")
-        logger.info(f"Agent {request.sid} joined agents room")
-    elif role == "user" and sid:
-        join_room(sid)
-        if sid not in sessions:
-            sessions[sid] = {"status": "grey", "lastMessage": "New session"}
-            emit(
-                "new_session",
-                {"sessionId": sid, "lastMessage": "New session"},
-                room="agents"
-            )
-            emit(
-                "status_update",
-                {"sessionId": sid, "status": "grey"},
-                room="agents"
-            )
-            logger.info(f"New session created: {sid}")
-        logger.info(f"User {request.sid} joined session: {sid}")
-
-@socketio.on("client_message")
-def handle_client_message(data):
-    sid = data.get("sessionId")
-    message = data.get("message")
-    logger.info(f"Client message: sessionId={sid}, message={message}")
-    
-    if sid not in sessions:
-        sessions[sid] = {"status": "grey", "lastMessage": message}
-        emit(
-            "new_session",
-            {"sessionId": sid, "lastMessage": message},
-            room="agents"
-        )
-        emit(
-            "status_update",
-            {"sessionId": sid, "status": "grey"},
-            room="agents"
-        )
-    
-    sessions[sid]["lastMessage"] = message
-    sessions[sid]["status"] = "amber"
-    
-    emit(
-        "incoming_message",
-        {"sessionId": sid, "message": message},
-        room="agents"
-    )
-    emit(
-        "status_update",
-        {"sessionId": sid, "status": "amber"},
-        room="agents"
-    )
-    
-    if override_states.get(sid, False):
-        logger.info(f"Session {sid} in override, message forwarded to agents")
+@app.route("/review", methods=["GET", "POST"])
+def review():
+    conn = sqlite3.connect('/app/flag.db')
+    c = conn.cursor()
+    if request.method == "GET":
+        c.execute("SELECT session_id, question, status, human_response FROM chat_sessions WHERE status = 'pending'")
+        sessions = c.fetchall()
+        conn.close()
+        return render_template("review.html", sessions=sessions)
     else:
-        resp = ask_via_function(message)
-        emit(
-            "bot_response",
-            {"sessionId": sid, "message": resp["answer"]},
-            room=sid
+        data = request.form
+        session_id = data.get("session_id")
+        human_response = data.get("human_response")
+        if not session_id or not human_response:
+            conn.close()
+            return jsonify(error="Missing session_id or human_response"), 400
+        c.execute(
+            "UPDATE chat_sessions SET human_response = ?, status = ? WHERE session_id = ?",
+            (human_response, "human", session_id)
         )
-        emit(
-            "bot_response",
-            {"sessionId": sid, "message": resp["answer"]},
-            room="agents"
-        )
+        conn.commit()
+        conn.close()
+        return jsonify(success="Response submitted"), 200
 
-@socketio.on("takeover")
-def handle_takeover(data):
-    sid = data.get("sessionId")
-    logger.info(f"Takeover: sessionId={sid}")
-    
-    if sid in sessions:
-        override_states[sid] = True
-        sessions[sid]["status"] = "red"
-        emit(
-            "system_message",
-            {"sessionId": sid, "message": "⚠️ Human agent has taken over."},
-            room=sid
-        )
-        emit(
-            "system_message",
-            {"sessionId": sid, "message": "You are now in control of this chat."},
-            room="agents"
-        )
-        emit(
-            "status_update",
-            {"sessionId": sid, "status": "red"},
-            room="agents"
-        )
-
-@socketio.on("agent_message")
-def handle_agent_message(data):
-    sid = data.get("sessionId")
-    message = data.get("message")
-    logger.info(f"Agent message: sessionId={sid}, message={message}")
-    
-    if sid in sessions:
-        emit(
-            "agent_message",
-            {"sessionId": sid, "message": message},
-            room=sid
-        )
-        emit(
-            "agent_message",
-            {"sessionId": sid, "message": message},
-            room="agents"
-        )
-
-@socketio.on("release")
-def handle_release(data):
-    sid = data.get("sessionId")
-    logger.info(f"Release: sessionId={sid}")
-    
-    if sid in sessions:
-        override_states[sid] = False
-        sessions[sid]["status"] = "grey"
-        emit(
-            "system_message",
-            {"sessionId": sid, "message": "🤖 Chatbot has resumed control."},
-            room=sid
-        )
-        emit(
-            "system_message",
-            {"sessionId": sid, "message": "You have released this chat."},
-            room="agents"
-        )
-        emit(
-            "status_update",
-            {"sessionId": sid, "status": "grey"},
-            room="agents"
-        )
-
-# ─── Helper to invoke ask() internally ───────────────────────────────────────
-def ask_via_function(question):
-    with app.app_context():
-        with app.test_request_context(json={"question": question}):
-            resp = ask()
-            return resp.get_json()
-
-# ─── Serve static files ───────────────────────────────────────────────────────
-@app.route('/agent')
-def agent_dashboard():
-    return send_from_directory(app.static_folder, 'agent.html')
-
-@app.route('/static/<path:filename>')
-def serve_static(filename):
-    return send_from_directory(app.static_folder, filename)
-
-# ─── Run the app ─────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    socketio.run(app, host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=5000)
