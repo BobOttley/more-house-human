@@ -10,16 +10,14 @@ const input        = document.getElementById('agent-input');
 const sendBtn      = document.getElementById('agent-send');
 
 let currentSession = null;
-
-// Keep track of sessions { sid: { li, dot } }
 const sessions = {};
 
-// Join the “agents” room so we get broadcast events
+// Connect as agent and join the “agents” room
+const socket = io({ query: { role: 'agent' } });
 socket.emit('join', { role: 'agent' });
 
-// When a new chat starts
-socket.on('new_session', data => {
-  const { sessionId, lastMessage } = data;
+// Handle a brand-new chat session
+socket.on('new_session', ({ sessionId, lastMessage }) => {
   if (sessions[sessionId]) return;
 
   const li  = document.createElement('li');
@@ -27,53 +25,49 @@ socket.on('new_session', data => {
   dot.className = 'status-dot grey';
   dot.style.marginRight = '6px';
 
-  li.appendChild(dot);
-  li.appendChild(document.createTextNode(`${sessionId} – ${lastMessage}`));
   li.id = `session-${sessionId}`;
-  li.onclick = () => openSession(sessionId);
+  li.append(dot, document.createTextNode(`${sessionId} – ${lastMessage}`));
+  li.addEventListener('click', () => openSession(sessionId));
 
   sessionList.appendChild(li);
   sessions[sessionId] = { li, dot };
 });
 
-// Update status (grey, amber, red)
-socket.on('status_update', data => {
-  const { sessionId, status } = data;
+// Update a session’s status dot (grey, amber, red)
+socket.on('status_update', ({ sessionId, status }) => {
   const session = sessions[sessionId];
-  if (!session) return;
-  session.dot.className = `status-dot ${status}`;
+  if (session) session.dot.className = `status-dot ${status}`;
 });
 
-// Incoming user message (while bot still in control)
-socket.on('incoming_message', data => {
-  const { sessionId, message } = data;
+// A user has sent a message while the bot is still in control
+socket.on('incoming_message', ({ sessionId, message }) => {
+  // Fallback: if we never saw this session, register it now
   if (!sessions[sessionId]) {
     socket.emit('new_session', { sessionId, lastMessage: message });
   }
+  // If we’re viewing this session, display it
   if (sessionId === currentSession) {
     addMessage('User', message);
   }
-  // flag if not current
-  sessions[sessionId].dot.classList.replace('grey','amber');
+  // Flag it amber if it’s not the active session
+  sessions[sessionId].dot.classList.replace('grey', 'amber');
 });
 
-// Bot’s reply
-socket.on('bot_response', data => {
-  const { sessionId, message } = data;
+// The bot has replied
+socket.on('bot_response', ({ sessionId, message }) => {
   if (sessionId === currentSession) {
     addMessage('Bot', message);
   }
 });
 
-// System messages
-socket.on('system_message', data => {
-  const { sessionId, message } = data;
+// System notifications (takeover, release, etc.)
+socket.on('system_message', ({ sessionId, message }) => {
   if (sessionId === currentSession) {
     addMessage('System', message);
   }
 });
 
-// Open / switch to a session
+// Switch to a particular session
 function openSession(sid) {
   currentSession = sid;
   chatHeader.textContent = sid;
@@ -82,32 +76,32 @@ function openSession(sid) {
   btnRelease.disabled  = true;
 }
 
-// Send an agent reply
-sendBtn.onclick = () => {
+// Send a human (agent) message
+sendBtn.addEventListener('click', () => {
   const text = input.value.trim();
   if (!text || !currentSession) return;
   addMessage('Agent', text);
   socket.emit('agent_message', { sessionId: currentSession, message: text });
   input.value = '';
-};
+});
 
-// Takeover
-btnTakeover.onclick = () => {
+// Take over from the bot
+btnTakeover.addEventListener('click', () => {
   if (!currentSession) return;
   socket.emit('takeover', { sessionId: currentSession });
   btnTakeover.disabled = true;
   btnRelease.disabled  = false;
-};
+});
 
-// Release
-btnRelease.onclick = () => {
+// Release control back to the bot
+btnRelease.addEventListener('click', () => {
   if (!currentSession) return;
   socket.emit('release', { sessionId: currentSession });
   btnTakeover.disabled = false;
   btnRelease.disabled  = true;
-};
+});
 
-// Helper to append a chat bubble
+// Helper to append messages into the chat panel
 function addMessage(sender, text) {
   const p = document.createElement('p');
   p.textContent = `${sender}: ${text}`;
