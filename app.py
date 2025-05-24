@@ -6,8 +6,9 @@ from datetime import date
 
 import numpy as np
 import openai
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS, cross_origin
+from flask_socketio import SocketIO, join_room, emit
 from dotenv import load_dotenv
 from fuzzywuzzy import fuzz
 
@@ -17,7 +18,16 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 if not openai.api_key:
     raise RuntimeError("OPENAI_API_KEY not set in .env")
 
-# ─── URL lookup ───────────────────────────────────────────────────────────────
+# ─── Flask & SocketIO setup ───────────────────────────────────────────────────
+app = Flask(__name__)
+app.config['SECRET_KEY'] = os.getenv("SECRET_KEY", "CHANGE_ME")
+CORS(app, resources={r"/ask": {"origins": "*"}})
+socketio = SocketIO(app, cors_allowed_origins="*")
+
+# track which sessions are in human-override
+override_states = {}  # session_id → bool
+
+# ─── Paste your existing dictionaries here UNCHANGED ──────────────────────────
 PAGE_LINKS = {
     # Home
     "home":               "https://www.morehouse.org.uk/",
@@ -1113,35 +1123,30 @@ with open("embeddings.pkl", "rb") as f:
 with open("metadata.pkl", "rb") as f:
     metadata = pickle.load(f)
 
-EMB_MODEL  = "text-embedding-3-small"
+EMB_MODEL = "text-embedding-3-small"
 CHAT_MODEL = "gpt-3.5-turbo"
 
-# ─── System prompt ────────────────────────────────────────────────────────────
 today = date.today().isoformat()
 system_prompt = (
     f"You are a friendly, professional assistant for More House School.\n"
     f"Today's date is {today}.\n"
-    "Begin with 'Thank you for your question!' and end with 'Anything else I can help you with today?'.\n"
+    "Begin with 'Thank you for your question!' and end with "
+    "'Anything else I can help you with today?'.\n"
     "If you do not know the answer, say 'I'm sorry, I don't have that information.'\n"
     "Use British spelling."
 )
 
-app = Flask(__name__)
-CORS(app, resources={r"/ask": {"origins": "*"}})
-
-
+# ─── Utility functions ──────────────────────────────────────────────────────
 def cosine_similarities(matrix, vector):
     dot = matrix @ vector
     norms = np.linalg.norm(matrix, axis=1) * np.linalg.norm(vector)
     return dot / (norms + 1e-8)
-
 
 def remove_bullets(text):
     return " ".join(
         line[2:].strip() if line.startswith("- ") else line.strip()
         for line in text.split("\n")
     )
-
 
 def format_response(ans):
     footer = "Anything else I can help you with today?"
@@ -1162,11 +1167,10 @@ def format_response(ans):
     paras.append(footer)
     return "\n\n".join(paras)
 
-
+# ─── HTTP endpoint for automated “ask” ──────────────────────────────────────
 @app.route("/", methods=["GET"])
 def home():
     return "PEN.ai is running."
-
 
 @app.route("/ask", methods=["POST"])
 @cross_origin()
@@ -1197,7 +1201,7 @@ def ask():
                     link_label=label
                 ), 200
 
-        # 3) Welcome (custom — no “Thank you for your question!”)
+        # 3) Welcome
         if question == "__welcome__":
             raw = (
                 "Hi there! Ask me anything about More House School.\n\n"
@@ -1238,7 +1242,7 @@ def ask():
             model=CHAT_MODEL,
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt},
+                {"role": "user",   "content": prompt},
             ],
         )
         raw = chat.choices[0].message.content
@@ -1247,7 +1251,6 @@ def ask():
         # 7) Fallback URL + human label
         if not relevant_url and top_idxs.size:
             relevant_url = metadata[top_idxs[0]].get("url")
-
         link_label = URL_LABELS.get(relevant_url)
 
         return jsonify(
@@ -1260,6 +1263,67 @@ def ask():
         traceback.print_exc()
         return jsonify(error=str(e)), 500
 
+# ─── SocketIO events for live chat & human takeover ─────────────────────────
+@socketio.on("join")
+def on_join(data):
+    sid  = data["sessionId"]
+    role = data.get("role", "user")
+    join_room(f"{role}_{sid}")
 
+@socketio.on("client_message")
+def handle_client_message(data):
+    sid     = data["sessionId"]
+    message = data["message"]
+    if override_states.get(sid):
+        # send user text to agent instead of bot
+        emit("incoming_message", {"message": message}, room=f"agent_{sid}")
+    else:
+        # bot handles it
+        resp = ask_via_function(message)
+        emit("bot_response", {"message": resp["answer"]}, room=f"user_{sid}")
+
+@socketio.on("takeover")
+def handle_takeover(data):
+    sid = data["sessionId"]
+    override_states[sid] = True
+    emit("system_message",
+         {"message": "⚠️ Human agent has taken over."},
+         room=f"user_{sid}")
+    emit("system_message",
+         {"message": "You are now in control of this chat."},
+         room=f"agent_{sid}")
+
+@socketio.on("agent_message")
+def handle_agent_message(data):
+    sid  = data["sessionId"]
+    text = data["message"]
+    emit("bot_response", {"message": text}, room=f"user_{sid}")
+
+@socketio.on("release")
+def handle_release(data):
+    sid = data["sessionId"]
+    override_states[sid] = False
+    emit("system_message",
+         {"message": "🤖 Chatbot has resumed control."},
+         room=f"user_{sid}")
+    emit("system_message",
+         {"message": "You have released this chat."},
+         room=f"agent_{sid}")
+
+# ─── Helper to invoke ask() internally ───────────────────────────────────────
+def ask_via_function(question):
+    with app.test_request_context(json={"question": question}):
+        resp = ask()
+        return resp.get_json()
+
+# ─── Serve the agent dashboard ────────────────────────────────────────────────
+@app.route("/agent")
+def agent_dashboard():
+    # assumes you put agent.html in your app’s /static folder
+    return app.send_static_file("agent.html")
+
+
+# ─── Run the app ─────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    # In production, you may switch to `eventlet` or `gevent` for better concurrency
+    socketio.run(app, host="0.0.0.0", port=5000)
