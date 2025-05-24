@@ -10,9 +10,11 @@ import numpy as np
 import openai
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS, cross_origin
+from flask_socketio import SocketIO, emit
 from dotenv import load_dotenv
 from fuzzywuzzy import fuzz
 from email.mime.text import MIMEText
+import uuid
 
 # ─── Initialise ──────────────────────────────────────────────────────────────
 load_dotenv()
@@ -26,6 +28,10 @@ SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
 SMTP_USER = os.getenv("SMTP_USER")
 SMTP_PASS = os.getenv("SMTP_PASS")
 MODERATOR_EMAIL = os.getenv("MODERATOR_EMAIL", "registrar@morehousemail.org.uk")
+
+app = Flask(__name__)
+CORS(app, resources={r"/ask": {"origins": "*"}, r"/status": {"origins": "*"}})
+socketio = SocketIO(app, cors_allowed_origins="*")
 
 # ─── SQLite Database Setup ───────────────────────────────────────────────────
 def init_db():
@@ -46,7 +52,7 @@ def init_db():
 
 init_db()
 
-# ─── URL lookup (unchanged) ───────────────────────────────────────────────────
+# ─── URL lookup ───────────────────────────────────────────────────────────────
 PAGE_LINKS = {
     "home": "https://www.morehouse.org.uk/",
     "homepage": "https://www.morehouse.org.uk/",
@@ -167,7 +173,7 @@ URL_LABELS = {
     "https://www.morehouse.org.uk/information/school-policies/": "More about Policies",
 }
 
-# ─── Static QAs (unchanged) ──────────────────────────────────────────────────
+# ─── Static QAs ──────────────────────────────────────────────────────────────
 STATIC_QAS = {
     "enquiry": (
         "Please complete our enquiry form and we will tailor a prospectus exactly for you and your child.",
@@ -787,7 +793,7 @@ STATIC_QAS = {
         "Access Parent Portal"
     ),
     "jobs": (
-        "All current staff vacancies and application details are listed on our Vacancies page. For enquiries, please contact the Director of Admissions at registrar@morehousemail.org.uk.",
+        "All current staff vacancies and application details are listed on our Vacancies page. For enquiries, please contact the Director of Admissions at registrar@more photosynthetic://more-house-human.onrender.com/askhousemail.org.uk.",
         None,
         "View Vacancies"
     ),
@@ -1020,9 +1026,6 @@ def send_alert_email(question, session_id):
     except Exception as e:
         print(f"Failed to send email alert: {e}")
 
-app = Flask(__name__)
-CORS(app, resources={r"/ask": {"origins": "*"}, r"/status": {"origins": "*"}, r"/takeover": {"origins": "*"}})
-
 def cosine_similarities(matrix, vector):
     dot = matrix @ vector
     norms = np.linalg.norm(matrix, axis=1) * np.linalg.norm(vector)
@@ -1076,6 +1079,13 @@ def ask():
         session = c.fetchone()
         if session and session[0] == "human" and session[1]:
             conn.close()
+            socketio.emit("human_response", {
+                "session_id": session_id,
+                "answer": format_response(session[1], is_human=True),
+                "url": None,
+                "link_label": None,
+                "source": "human"
+            }, room=session_id)
             return jsonify(
                 answer=format_response(session[1], is_human=True),
                 url=None,
@@ -1085,6 +1095,13 @@ def ask():
             ), 200
         elif session and session[0] == "pending":
             conn.close()
+            socketio.emit("system_alert", {
+                "session_id": session_id,
+                "answer": "Your question has been flagged for human review. A member of our team will respond soon.",
+                "url": None,
+                "link_label": None,
+                "source": "system"
+            }, room=session_id)
             return jsonify(
                 answer="Your question has been flagged for human review. A member of our team will respond soon.",
                 url=None,
@@ -1102,6 +1119,13 @@ def ask():
             )
             conn.commit()
             conn.close()
+            socketio.emit("bot_response", {
+                "session_id": session_id,
+                "answer": format_response(remove_bullets(raw)),
+                "url": url,
+                "link_label": label,
+                "source": "bot"
+            }, room=session_id)
             return jsonify(
                 answer=format_response(remove_bullets(raw)),
                 url=url,
@@ -1119,6 +1143,13 @@ def ask():
                 )
                 conn.commit()
                 conn.close()
+                socketio.emit("bot_response", {
+                    "session_id": session_id,
+                    "answer": format_response(remove_bullets(raw)),
+                    "url": url,
+                    "link_label": label,
+                    "source": "bot"
+                }, room=session_id)
                 return jsonify(
                     answer=format_response(remove_bullets(raw)),
                     url=url,
@@ -1140,6 +1171,13 @@ def ask():
             )
             conn.commit()
             conn.close()
+            socketio.emit("bot_response", {
+                "session_id": session_id,
+                "answer": remove_bullets(raw),
+                "url": PAGE_LINKS["enquiry"],
+                "link_label": "Enquire now",
+                "source": "bot"
+            }, room=session_id)
             return jsonify(
                 answer=remove_bullets(raw),
                 url=PAGE_LINKS["enquiry"],
@@ -1157,6 +1195,13 @@ def ask():
             )
             conn.commit()
             conn.close()
+            socketio.emit("bot_response", {
+                "session_id": session_id,
+                "answer": format_response(raw),
+                "url": None,
+                "link_label": None,
+                "source": "bot"
+            }, room=session_id)
             return jsonify(
                 answer=format_response(raw),
                 url=None,
@@ -1201,6 +1246,13 @@ def ask():
             conn.commit()
             conn.close()
             send_alert_email(question, session_id)
+            socketio.emit("system_alert", {
+                "session_id": session_id,
+                "answer": "Your question has been flagged for human review. A member of our team will respond soon.",
+                "url": None,
+                "link_label": None,
+                "source": "system"
+            }, room=session_id)
             return jsonify(
                 answer="Your question has been flagged for human review. A member of our team will respond soon.",
                 url=None,
@@ -1222,6 +1274,13 @@ def ask():
             relevant_url = metadata[top_idx].get("url")
         link_label = URL_LABELS.get(relevant_url)
 
+        socketio.emit("bot_response", {
+            "session_id": session_id,
+            "answer": answer,
+            "url": relevant_url,
+            "link_label": link_label,
+            "source": "bot"
+        }, room=session_id)
         return jsonify(
             answer=answer,
             url=relevant_url,
@@ -1230,36 +1289,6 @@ def ask():
             session_id=session_id
         ), 200
 
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify(error=str(e)), 500
-
-@app.route("/takeover", methods=["POST"])
-@cross_origin()
-def takeover():
-    try:
-        data = request.get_json(force=True)
-        session_id = data.get("session_id")
-        if not session_id:
-            return jsonify(error="No session_id provided"), 400
-        conn = sqlite3.connect('/app/flag.db')
-        c = conn.cursor()
-        c.execute("SELECT question FROM chat_sessions WHERE session_id = ?", (session_id,))
-        session = c.fetchone()
-        if not session:
-            conn.close()
-            return jsonify(error="Session not found"), 404
-        c.execute("UPDATE chat_sessions SET status = ? WHERE session_id = ?", ("pending", session_id))
-        conn.commit()
-        conn.close()
-        send_alert_email(session[0], session_id)
-        return jsonify(
-            answer="Your request for human assistance has been received. A member of our team will respond soon.",
-            url=None,
-            link_label=None,
-            source="system",
-            session_id=session_id
-        ), 200
     except Exception as e:
         traceback.print_exc()
         return jsonify(error=str(e)), 500
@@ -1281,6 +1310,13 @@ def status():
             return jsonify(error="Session not found"), 404
         status, human_response, bot_response = session
         if status == "human" and human_response:
+            socketio.emit("human_response", {
+                "session_id": session_id,
+                "answer": format_response(human_response, is_human=True),
+                "url": None,
+                "link_label": None,
+                "source": "human"
+            }, room=session_id)
             return jsonify(
                 answer=format_response(human_response, is_human=True),
                 url=None,
@@ -1289,6 +1325,13 @@ def status():
                 session_id=session_id
             ), 200
         elif status == "pending":
+            socketio.emit("system_alert", {
+                "session_id": session_id,
+                "answer": "Your question is still under human review. Please check back soon.",
+                "url": None,
+                "link_label": None,
+                "source": "system"
+            }, room=session_id)
             return jsonify(
                 answer="Your question is still under human review. Please check back soon.",
                 url=None,
@@ -1330,7 +1373,25 @@ def review():
         )
         conn.commit()
         conn.close()
+        socketio.emit("human_response", {
+            "session_id": session_id,
+            "answer": format_response(human_response, is_human=True),
+            "url": None,
+            "link_label": None,
+            "source": "human"
+        }, room=session_id)
         return jsonify(success="Response submitted"), 200
 
+@socketio.on("connect")
+def handle_connect():
+    print("Client connected")
+
+@socketio.on("join")
+def handle_join(data):
+    session_id = data.get("session_id")
+    if session_id:
+        print(f"Client joined room: {session_id}")
+        emit("joined", {"session_id": session_id}, room=session_id)
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    socketio.run(app, host="0.0.0.0", port=5000)
