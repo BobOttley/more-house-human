@@ -1,0 +1,343 @@
+// script.js
+console.log("🚀 script.js loaded - Version: 2025-05-10");
+
+// UI elements
+const toggle = document.getElementById('penai-toggle');
+const chatbox = document.getElementById('penai-chatbox');
+const msgs = document.getElementById('penai-messages');
+const input = document.getElementById('penai-input');
+const sendBtn = document.getElementById('penai-send-btn');
+const header = document.getElementById('penai-header');
+
+// Verify elements exist
+if (!toggle) console.error("Toggle element (#penai-toggle) not found");
+if (!chatbox) console.error("Chatbox element (#penai-chatbox) not found");
+if (!msgs) console.error("Messages element (#penai-messages) not found");
+if (!input) console.error("Input element (#penai-input) not found");
+if (!sendBtn) console.error("Send button (#penai-send-btn) not found");
+if (!header) console.error("Header element (#penai-header) not found");
+
+// Backend endpoint
+const ASK_URL = 'http://localhost:5000/ask';
+
+// State for the thinking indicator
+let thinkingDiv = null;
+
+// Load chat history
+function loadChatHistory() {
+  const history = JSON.parse(sessionStorage.getItem('chatHistory') || '[]');
+  history.forEach(({ type, text }) => {
+    if (type === 'user') appendUser(text);
+    else appendBot(text, false);
+  });
+}
+
+// Save chat history
+function saveChatHistory(type, text) {
+  const history = JSON.parse(sessionStorage.getItem('chatHistory') || '[]');
+  history.push({ type, text });
+  sessionStorage.setItem('chatHistory', JSON.stringify(history));
+}
+
+// Track clicked quick reply queries
+function trackClickedQuery(query) {
+  const clickedQueries = JSON.parse(sessionStorage.getItem('clickedQueries') || '[]');
+  if (!clickedQueries.includes(query)) {
+    clickedQueries.push(query);
+    sessionStorage.setItem('clickedQueries', JSON.stringify(clickedQueries));
+  }
+}
+
+// Get clicked quick reply queries
+function getClickedQueries() {
+  return JSON.parse(sessionStorage.getItem('clickedQueries') || '[]');
+}
+
+// Append a user message with “Me:” prefix
+function appendUser(text) {
+  console.log("Appending user message:", text);
+  const div = document.createElement('div');
+  div.className = 'penai-message penai-user';
+  div.innerHTML = `<strong>Me:</strong> ${text.replace(/</g, '<').replace(/>/g, '>')}`;
+  msgs.appendChild(div);
+  msgs.scrollTop = msgs.scrollHeight;
+  saveChatHistory('user', text);
+}
+
+// Button mapping for quick replies
+const buttonMap = [
+  { keywords: ['register', 'registration', 'admissions'], label: 'Fees', query: 'What are the school fees?' },
+  { keywords: ['register', 'registration', 'deadline'], label: 'Deadlines', query: 'What are the registration deadlines?' },
+  { keywords: ['lunch', 'lunches', 'meal', 'dietary'], label: 'Dietary Requirements', query: 'How do you cater for dietary requirements?' },
+  { keywords: ['lunch', 'lunches', 'menu'], label: 'Menu', query: 'Where can I find the school lunch menu?' },
+  { keywords: ['enquiry', 'enquire', 'prospectus', 'admissions'], label: 'Enquire Now', query: 'enquiry' },
+  { keywords: ['open day', 'open event', 'visit'], label: 'Open Events', query: 'What are the open events?' },
+  { keywords: ['uniform', 'dress code'], label: 'Uniform', query: 'What is the school uniform?' },
+  { keywords: ['term dates', 'calendar', 'holiday'], label: 'Term Dates', query: 'What are the term dates?' }
+];
+
+// Select relevant quick reply buttons
+function getQuickReplyButtons(question, answer) {
+  const questionLower = question.toLowerCase();
+  const answerLower = answer.toLowerCase();
+  const clickedQueries = getClickedQueries();
+  const selectedButtons = [];
+  buttonMap.forEach(button => {
+    if (selectedButtons.length < 3 && !clickedQueries.includes(button.query) && (
+      button.keywords.some(keyword => questionLower.includes(keyword)) ||
+      button.keywords.some(keyword => answerLower.includes(keyword))
+    )) {
+      selectedButtons.push(button);
+    }
+  });
+  // Fill with unclicked buttons if needed
+  if (selectedButtons.length < 3) {
+    buttonMap.forEach(button => {
+      if (selectedButtons.length < 3 && !clickedQueries.includes(button.query) && !selectedButtons.includes(button)) {
+        selectedButtons.push(button);
+      }
+    });
+  }
+  // Always include 'Enquire Now' if not clicked and not already included
+  if (selectedButtons.length < 3 && !clickedQueries.includes('enquiry') && !selectedButtons.some(b => b.label === 'Enquire Now')) {
+    selectedButtons.push(buttonMap.find(b => b.label === 'Enquire Now'));
+  }
+  return selectedButtons.slice(0, 3);
+}
+
+// Append a bot message with “PEN.ai:” prefix
+function appendBot(html, isWelcome = false) {
+  console.log("Appending bot message:", html);
+  const div = document.createElement('div');
+  div.className = 'penai-message penai-bot';
+  div.innerHTML = `<strong><span class="penai-prefix">PEN.ai:</span></strong> ${html}`;
+  msgs.appendChild(div);
+  if (!isWelcome) {
+    const buttons = document.createElement('div');
+    buttons.className = 'quick-replies';
+    const currentQuestion = input.dataset.lastQuestion || '';
+    const buttonsToShow = getQuickReplyButtons(currentQuestion, html);
+    buttons.innerHTML = buttonsToShow.map(button => `
+      <button class="quick-reply" data-query="${button.query}">${button.label}</button>
+    `).join('');
+    div.appendChild(buttons);
+  } else {
+    const buttons = document.createElement('div');
+    buttons.className = 'quick-replies';
+    buttons.innerHTML = `
+      <button class="quick-reply" data-query="how do i register">Register</button>
+      <button class="quick-reply" data-query="What are the options for school lunches?">School Lunches</button>
+      <button class="quick-reply" data-query="enquiry">Enquire Now</button>
+    `;
+    div.appendChild(buttons);
+  }
+  msgs.scrollTop = msgs.scrollHeight;
+  saveChatHistory('bot', html);
+  return div;
+}
+
+// Show “PEN.ai is thinking…” indicator
+function showThinking() {
+  console.log("Showing thinking indicator");
+  thinkingDiv = document.createElement('div');
+  thinkingDiv.className = 'penai-message penai-bot';
+  thinkingDiv.innerHTML = `<strong><span class="penai-prefix">PEN.ai:</span></strong> <em>PEN.ai is thinking…</em>`;
+  msgs.appendChild(thinkingDiv);
+  msgs.scrollTop = msgs.scrollHeight;
+}
+
+// Remove the “PEN.ai is thinking…” indicator
+function removeThinking() {
+  if (thinkingDiv && msgs.contains(thinkingDiv)) {
+    console.log("Removing thinking indicator");
+    msgs.removeChild(thinkingDiv);
+    thinkingDiv = null;
+  }
+}
+
+// Send a question to the backend
+async function sendQuestion(question, isWelcome = false) {
+  console.log("sendQuestion:", question, "isWelcome:", isWelcome);
+  if (!isWelcome) {
+    appendUser(question);
+    showThinking();
+    input.dataset.lastQuestion = question;
+  }
+
+  try {
+    const res = await fetch(ASK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question })
+    });
+
+    if (!res.ok) {
+      throw new Error(`HTTP error: ${res.status}`);
+    }
+
+    const data = await res.json();
+    console.log("Received /ask response:", data);
+    if (!isWelcome) {
+      removeThinking();
+    }
+
+    let answer = data.answer
+      .replace(/</g, '<').replace(/>/g, '>')
+      .replace(/\n/g, '<br>')
+      .replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+
+    appendBot(answer, isWelcome);
+  } catch (err) {
+    console.error("Error in sendQuestion:", err);
+    if (!isWelcome) {
+      removeThinking();
+    }
+    appendBot(`Sorry, I couldn't process your request. Please try again later. (Error: ${err.message})`);
+  }
+}
+
+// Auto-open chatbox with configurable delay
+const urlParams = new URLSearchParams(window.location.search);
+const chatDelay = parseInt(urlParams.get('chatDelay')) || 20000;
+setTimeout(() => {
+  console.log(`Auto-opening chatbox after ${chatDelay/1000} seconds`);
+  if (chatbox) {
+    chatbox.style.display = 'flex';
+    chatbox.style.flexDirection = 'column';
+    const history = JSON.parse(sessionStorage.getItem('chatHistory') || '[]');
+    if (!msgs.hasChildNodes() && history.length === 0) {
+      sendQuestion('__welcome__', true);
+    } else if (!msgs.hasChildNodes()) {
+      loadChatHistory();
+    }
+  } else {
+    console.error("Cannot auto-open chatbox: element not found");
+  }
+}, chatDelay);
+
+// Toggle chatbox visibility
+if (toggle) {
+  toggle.addEventListener('click', () => {
+    console.log("Toggle clicked, current display:", chatbox.style.display);
+    const isOpening = chatbox.style.display !== 'flex';
+    chatbox.style.display = isOpening ? 'flex' : 'none';
+    chatbox.style.flexDirection = 'column';
+    if (isOpening) {
+      while (msgs.firstChild) {
+        msgs.removeChild(msgs.firstChild);
+      }
+      const history = JSON.parse(sessionStorage.getItem('chatHistory') || '[]');
+      if (history.length === 0) {
+        sendQuestion('__welcome__', true);
+      } else {
+        loadChatHistory();
+      }
+    }
+  });
+} else {
+  console.error("Cannot attach event listener to toggle");
+}
+
+// Event listeners for sending messages
+if (sendBtn) {
+  sendBtn.addEventListener('click', () => {
+    const msg = input.value.trim();
+    if (!msg) {
+      console.log("No message entered, ignoring");
+      return;
+    }
+    input.value = '';
+    sendQuestion(msg);
+  });
+} else {
+  console.error("Cannot attach event listener to sendBtn");
+}
+
+if (input) {
+  input.addEventListener('keypress', e => {
+    if (e.key === 'Enter' && input.value.trim()) {
+      const msg = input.value.trim();
+      input.value = '';
+      sendQuestion(msg);
+    }
+  });
+} else {
+  console.error("Cannot attach event listener to input");
+}
+
+// Initialize chatbox as hidden
+if (chatbox) {
+  chatbox.style.display = 'none';
+  chatbox.style.flexDirection = 'column';
+} else {
+  console.error("Cannot initialize chatbox");
+}
+
+// Draggable chatbox functionality
+if (header && chatbox) {
+  let isDragging = false;
+  let currentX;
+  let currentY;
+  let initialX;
+  let initialY;
+
+  header.addEventListener('mousedown', (e) => {
+    initialX = e.clientX - currentX;
+    initialY = e.clientY - currentY;
+    isDragging = true;
+    console.log("Started dragging chatbox");
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (isDragging) {
+      e.preventDefault();
+      currentX = e.clientX - initialX;
+      currentY = e.clientY - initialY;
+      chatbox.style.left = `${currentX}px`;
+      chatbox.style.top = `${currentY}px`;
+      chatbox.style.right = 'auto';
+      chatbox.style.bottom = 'auto';
+      console.log(`Dragging chatbox to x:${currentX}, y:${currentY}`);
+    }
+  });
+
+  document.addEventListener('mouseup', () => {
+    isDragging = false;
+    console.log("Stopped dragging chatbox");
+  });
+
+  // Initialize position
+  currentX = window.innerWidth - 380;
+  currentY = window.innerHeight - 590;
+  chatbox.style.left = `${currentX}px`;
+  chatbox.style.top = `${currentY}px`;
+} else {
+  console.error("Cannot initialize draggable functionality");
+}
+
+// Theme toggle functionality
+if (document.getElementById('penai-theme-btn')) {
+  document.getElementById('penai-theme-btn').addEventListener('click', () => {
+    const root = document.documentElement;
+    const isDark = root.style.getPropertyValue('--primary-color') === '#091825';
+    if (isDark) {
+      root.style.setProperty('--primary-color', '#005670');
+      root.style.setProperty('--accent-color', '#FF69B4');
+      root.style.setProperty('--chat-bg', '#f0f4f8');
+    } else {
+      root.style.setProperty('--primary-color', '#091825');
+      root.style.setProperty('--accent-color', '#FF9F1C');
+      root.style.setProperty('--chat-bg', '#f9f9f9');
+    }
+    console.log(`Toggled theme to ${isDark ? 'light' : 'dark'}`);
+  });
+}
+
+// Quick reply event listeners
+document.addEventListener('click', (e) => {
+  if (e.target.classList.contains('quick-reply')) {
+    const query = e.target.getAttribute('data-query');
+    trackClickedQuery(query);
+    sendQuestion(query);
+  }
+});

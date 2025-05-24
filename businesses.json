@@ -1,0 +1,64 @@
+from flask import Flask, request, jsonify
+  from flask_cors import CORS
+  from openai import OpenAI
+  from dotenv import load_dotenv
+  import os
+  import json
+
+  app = Flask(__name__)
+  CORS(app)
+
+  # Load environment variables
+  load_dotenv()
+  client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+  # Load business configurations
+  with open('businesses.json', 'r') as f:
+      BUSINESSES = json.load(f)
+
+  # Load knowledge base
+  def load_knowledge_base(business_id):
+      kb_dir = f"kb_chunks/{business_id}"
+      context = ""
+      for filename in os.listdir(kb_dir):
+          with open(os.path.join(kb_dir, filename), 'r', encoding='utf-8') as f:
+              context += f.read() + "\n"
+      return context
+
+  @app.route('/ask', methods=['POST'])
+  def ask():
+      data = request.get_json()
+      question = data.get('question')
+      business_id = data.get('business_id', 'morehouse')
+
+      if question == '__welcome__':
+          business = BUSINESSES.get(business_id, BUSINESSES['morehouse'])
+          answer = business['welcome_message'].format(contact_url=business['contact_url'])
+          return jsonify({'answer': answer}), 200
+
+      context = load_knowledge_base(business_id)
+      prompt = (
+          f"You are a helpful chatbot for {BUSINESSES[business_id]['name']}. "
+          f"Use this info to answer accurately:\n\n{context}\n\n"
+          f"Question: {question}\nAnswer in a friendly, professional tone."
+      )
+
+      try:
+          response = client.chat.completions.create(
+              model="gpt-4o",
+              messages=[{"role": "system", "content": prompt}, {"role": "user", "content": question}],
+              max_tokens=200,
+              temperature=0.7
+          )
+          answer = response.choices[0].message.content.strip()
+          return jsonify({'answer': answer}), 200
+      except Exception as e:
+          return jsonify({'answer': "Sorry, I couldn't process your request. Please try again."}), 500
+
+  @app.route('/config', methods=['GET'])
+  def get_config():
+      business_id = request.args.get('business_id', 'morehouse')
+      return jsonify(BUSINESSES.get(business_id, BUSINESSES['morehouse'])), 200
+
+  if __name__ == '__main__':
+      app.run(debug=True)

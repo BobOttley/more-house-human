@@ -1,0 +1,18 @@
+TABLE:
+, 2024, 2023, 2022, 2021, 2020, 2019
+% A*-B, 45, 44, 69, 82, 60, 41
+% A*-C, 76, 85, 98, 92, 82, 73
+Pass rate, 96, 100, 100, 100, 100, 100
+
+TABLE:
+, 2024, 2023, 2022, 2021, 2020, 2019
+% 8-9, 14, 18, 26, 33, 13, 13
+% 7-9, 22, 27, 47, 49, 32, 32
+% 4-9, 87, 90, 97, 93, 95, 91
+
+TABLE:
+, , 
+
+At More House, we celebrate academic achievement, but know that this is not what defines our pupils. We value the whole person and our girls achieve so much more in their time with us than a set of grades. These results represent success in so many ways, as each learner’s journey is unique.
+As you know crude statistics do not do justice to the value-added scores and individual successes and achievements of every one of our girls. Our value-added results continue to underline how, relative to their academic starting points, More House girls outperform other schools with similar intakes in public examinations. In terms of Value Added, we can confidently say that we have added at least one grade to pupils’ outcomes, on average, across all subjects.
+The bespoke offering in our Sixth Form means that we encourage the girls to know themselves well and to choose the right path when they leave us.

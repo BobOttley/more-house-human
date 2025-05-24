@@ -1,0 +1,115 @@
+/* Floating toggle button */
+#penai-toggle {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  width: 60px;
+  height: 60px;
+  background: #FF9F1C;          /* Award Gold */
+  border-radius: 50%;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Neue Haas Grotesk', sans-serif;
+  font-size: 14px;
+  font-weight: bold;
+  color: #091825;               /* Blazer Navy */
+  z-index: 9999;
+}
+
+/* Chat box container */
+#penai-chatbox {
+  display: none;
+  position: fixed;
+  bottom: 100px;
+  right: 20px;
+  width: 320px;
+  height: 400px;
+  background: #ffffff;
+  border: 2px solid #FF9F1C;    /* Award Gold */
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  flex-direction: column;
+  overflow: hidden;
+  z-index: 9999;
+  font-family: 'Neue Haas Grotesk', sans-serif;
+}
+
+/* Header bar */
+#penai-header {
+  background: #091825;          /* Blazer Navy */
+  color: #ffffff;
+  padding: 10px;
+  font-size: 16px;
+  font-weight: bold;
+  cursor: move;
+  display: flex;
+  align-items: center;
+}
+
+/* Messages area */
+#penai-messages {
+  flex: 1;
+  padding: 10px;
+  overflow-y: auto;
+  font-size: 14px;
+  background: #f9f9f9;
+}
+
+/* Input area */
+#penai-input-container {
+  display: flex;
+  border-top: 1px solid #eee;
+  padding: 8px;
+  background: #ffffff;
+}
+
+#penai-input {
+  flex: 1;
+  padding: 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  margin-right: 8px;
+  font-size: 14px;
+}
+
+#penai-send-btn {
+  background: #FF9F1C;          /* Award Gold */
+  border: none;
+  padding: 0 16px;
+  color: #091825;               /* Blazer Navy */
+  font-weight: bold;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+/* Chat bubbles */
+.penai-message {
+  margin: 6px 0;
+  padding: 6px 10px;
+  border-radius: 4px;
+  max-width: 80%;
+}
+
+.penai-user {
+  background: #e1f5fe;
+  margin-left: auto;
+  text-align: right;
+}
+
+.penai-bot {
+  background: #f1f8e9;
+  margin-right: auto;
+  text-align: left;
+}
+#powered-by {
+  font-style: italic;
+  color: #888888;
+  font-size: 12px;
+  text-align: center;
+  padding: 8px 0;
+  font-family: Arial, sans-serif; /* or your preferred font */
+}
+

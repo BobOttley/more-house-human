@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cognitive College</title>
+
+  <!-- Your existing site CSS -->
+  <style>
+    /* Brand colour palette */
+    :root {
+      --primary-colour: #283593;     /* Deep Indigo */
+      --secondary-colour: #009688;   /* Teal */
+      --accent-colour: #FF9800;      /* Vibrant Orange */
+      --background-colour: #FFFFFF;  /* White */
+      --text-colour: #333333;        /* Dark Grey */
+      --heading-colour: #212121;     /* Almost Black */
+    }
+
+    /* Global resets & typography */
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: var(--background-colour);
+      colour: var(--text-colour);
+      line-height: 1.6;
+    }
+    a {
+      text-decoration: none;
+      colour: inherit;
+    }
+    h1, h2, h3 {
+      colour: var(--heading-colour);
+      margin-bottom: 0.5em;
+    }
+    p {
+      margin-bottom: 1em;
+    }
+
+    /* Header & Navigation */
+    header {
+      background: var(--primary-colour);
+      padding: 1rem 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .logo {
+      font-size: 1.5rem;
+      font-weight: bold;
+      colour: #FFFFFF;
+    }
+    nav ul {
+      list-style: none;
+      display: flex;
+      gap: 1.5rem;
+    }
+    nav a {
+      colour: #FFFFFF;
+      font-weight: 500;
+      transition: opacity .2s;
+    }
+    nav a:hover {
+      opacity: .7;
+    }
+
+    /* Hero Section */
+    .hero {
+      background: url('hero.jpg') centre centre/cover no-repeat;
+      padding: 6rem 2rem;
+      text-align: centre;
+      colour: #FFFFFF;
+      position: relative;
+    }
+    .hero::after {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.4);
+    }
+    .hero .content {
+      position: relative;
+      z-index: 1;
+      max-width: 700px;
+      margin: auto;
+    }
+    .hero h1 {
+      font-size: 3rem;
+      margin-bottom: .5rem;
+    }
+    .hero p {
+      font-size: 1.25rem;
+      margin-bottom: 1.5rem;
+    }
+    .btn {
+      display: inline-block;
+      padding: .75rem 1.5rem;
+      background: var(--accent-colour);
+      colour: #FFFFFF;
+      font-weight: bold;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: background .2s;
+    }
+    .btn:hover {
+      background: #e68a00;
+    }
+
+    /* Features Section */
+    .features {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 2rem;
+      padding: 4rem 2rem;
+      max-width: 1100px;
+      margin: auto;
+    }
+    .feature {
+      flex: 1 1 280px;
+      text-align: centre;
+    }
+    .feature h3 {
+      margin-bottom: .75rem;
+      colour: var(--secondary-colour);
+    }
+
+    /* Testimonials */
+    .testimonials {
+      background: #f9f9f9;
+      padding: 4rem 2rem;
+    }
+    .testimonials h2 {
+      text-align: centre;
+      margin-bottom: 2rem;
+    }
+    .testi-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 2rem;
+      max-width: 1000px;
+      margin: auto;
+    }
+    .testi {
+      background: #FFFFFF;
+      padding: 2rem;
+      border-radius: 6px;
+      flex: 1 1 300px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    .testi p {
+      font-style: italic;
+      margin-bottom: 1rem;
+    }
+    .testi .author {
+      font-weight: bold;
+      colour: var(--primary-colour);
+    }
+
+    /* Call to Action */
+    .cta {
+      text-align: centre;
+      padding: 3rem 2rem;
+    }
+    .cta h2 {
+      margin-bottom: 1rem;
+    }
+
+    /* Footer */
+    footer {
+      background: var(--primary-colour);
+      colour: #FFFFFF;
+      padding: 2rem;
+      text-align: centre;
+    }
+    footer p {
+      margin-bottom: .5rem;
+    }
+    footer a {
+      colour: #FFFFFF;
+      margin: 0 .5rem;
+      font-size: .9rem;
+    }
+
+    /* Responsive tweaks */
+    @media (max-width: 768px) {
+      .features, .testi-list {
+        flex-direction: column;
+      }
+      .hero h1 {
+        font-size: 2.5rem;
+      }
+    }
+  </style>
+
+  <!-- PEN.ai chatbot styles -->
+  <link
+    rel="stylesheet"
+    href="https://more-house-school.s3.eu-west-2.amazonaws.com/styles.css"
+  />
+</head>
+<body>
+
+  <header>
+    <div class="logo">Cognitive College</div>
+    <nav>
+      <ul>
+        <li><a href="#about">About</a></li>
+        <li><a href="#courses">Courses</a></li>
+        <li><a href="#admissions">Admissions</a></li>
+        <li><a href="#contact">Contact</a></li>
+      </ul>
+    </nav>
+  </header>
+
+  <section class="hero" id="home">
+    <div class="content">
+      <h1>Empower Your Mind. Redefine Learning.</h1>
+      <p>Join Cognitive College for an AI-driven, personalised education experience that adapts to you.</p>
+      <button class="btn">Explore Courses</button>
+    </div>
+  </section>
+
+  <section class="features" id="about">
+    <div class="feature">
+      <h3>Interactive Workshops</h3>
+      <p>Hands-on sessions led by industry experts in small, collaborative cohorts.</p>
+    </div>
+    <div class="feature">
+      <h3>AI-Driven Tutoring</h3>
+      <p>Smart, personalised feedback to help you master concepts faster and more deeply.</p>
+    </div>
+    <div class="feature">
+      <h3>Global Community</h3>
+      <p>Connect with peers and mentors from around the world in our vibrant online forum.</p>
+    </div>
+  </section>
+
+  <section class="testimonials" id="courses">
+    <h2>What Our Students Say</h2>
+    <div class="testi-list">
+      <div class="testi">
+        <p>“Cognitive College transformed the way I learn. The AI tutor flagged my gaps instantly!”</p>
+        <div class="author">– Aisha Khan, Data Science Graduate</div>
+      </div>
+      <div class="testi">
+        <p>“The workshops are incredibly engaging. I’ve built real projects within weeks.”</p>
+        <div class="author">– Michael O’Leary, Software Developer</div>
+      </div>
+      <div class="testi">
+        <p>“I love the global community. I’ve made friends and collaborators across five continents.”</p>
+        <div class="author">– Li Wei, UX Designer</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="cta" id="admissions">
+    <h2>Ready to Start?</h2>
+    <p>Applications are now open for our autumn term. Secure your spot today.</p>
+    <button class="btn">Apply Now</button>
+  </section>
+
+  <footer id="contact">
+    <p>© 2025 Cognitive College</p>
+    <p>
+      <a href="#">Privacy Policy</a> |
+      <a href="#">Terms of Service</a> |
+      <a href="#">Contact Us</a>
+    </p>
+  </footer>
+
+  <!-- PEN.ai chatbot toggle & chatbox -->
+  <div id="penai-toggle">💬</div>
+  <div id="penai-chatbox">
+    <div id="penai-header" class="draggable">
+      <h2>Chat with PEN.ai</h2>
+      <div id="powered-by-header">Powered by Cognitive Tasking</div>
+    </div>
+    <div id="penai-messages"></div>
+    <div id="penai-input-container">
+      <input id="penai-input" placeholder="Ask a question…" autocomplete="off"/>
+      <button id="penai-send-btn">Send</button>
+    </div>
+  </div>
+
+  <!-- PEN.ai chatbot logic -->
+  <script src="https://more-house-school.s3.eu-west-2.amazonaws.com/script.js"></script>
+</body>
+</html>

@@ -1,0 +1,6 @@
+childName,childGender,parentName,email,entryYear,academicInterests,extracurricularInterests,sportsSelections,sportsPreferences,learningSupport,parentPriorities
+Billy,Male,Male,robert@gmail.com,Senior 1 (11–12),"Humanities (e.g., History, Literature)","Sports, Creative Arts (e.g., Painting, Theatre), Music (e.g., Choir, Band)","Football, Cricket, Rugby","Football, Rugby, Cricket","Specialist Support (e.g., dyslexia, ADHD)",Balanced Approach
+gillian,Female,Bob Ottley,robert.ottley@cog.com,Senior 5 (15–16),"Sciences (e.g., Biology, Physics)",Mixed Interests,,,Senior 5 (15–16),"Specialist Support (e.g., dyslexia, ADHD)"
+Jess,Female,Anne,anne.elliot@bt.com,Senior 5 (15–16),,,,,Prefer to Discuss Privately,Academic Excellence
+Billy,Male,Gino,robb@bt.com,Senior 5 (15–16),,,,,"Specialist Support (e.g., dyslexia, ADHD)",Academic Excellence
+Bob,Male,george,george@bt.com,Lower Sixth (16–17),"Sciences, Humanities, Mathematics",,,,,

@@ -1,0 +1,13 @@
+{
+  "morehouse": {
+    "name": "More House School",
+    "kb_dir": "kb_chunks/morehouse",
+    "contact_url": "https://www.morehouse.org.uk/admissions/enquiry/",
+    "primary_color": "#091825",
+    "accent_color": "#FF9F1C",
+    "light_primary_color": "#005670",
+    "light_accent_color": "#FF69B4",
+    "welcome_message": "Hi! Welcome to {name}. Ask me anything about our services.\n\nGet in touch: 
+{contact_url}\n\nHow can I assist you today?"
+  }
+}

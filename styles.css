@@ -1,0 +1,154 @@
+:root {
+  --primary-color: #091825; /* Header, send button */
+  --accent-color: #FF9F1C;  /* Toggle, PEN.ai prefix */
+  --text-color: #fff;
+  --chat-bg: #f9f9f9;
+  --border-color: #e0e0e0;
+}
+
+body {
+  font-family: Arial, sans-serif;
+  background: #f4f6f8;
+  margin: 0;
+  padding: 0;
+  color: var(--text-color);
+}
+
+/* Floating toggle button */
+#penai-toggle {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  background: var(--accent-color);
+  color: var(--text-color);
+  font-size: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+  z-index: 1000;
+  transition: transform .2s;
+}
+#penai-toggle:hover {
+  transform: scale(1.1);
+}
+
+/* Chatbox container */
+#penai-chatbox {
+  display: none;
+  flex-direction: column;
+  position: fixed;
+  bottom: 90px;
+  right: 20px;
+  width: 360px;
+  max-height: 500px;
+  background: #fff;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+  z-index: 999;
+  animation: slideUp .3s ease-out;
+}
+@keyframes slideUp {
+  from { transform: translateY(20px); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+
+/* Header bar */
+#penai-header {
+  display: flex;
+  align-items: center;
+  padding: 10px 15px;
+  background: var(--primary-color);
+  color: var(--text-color);
+  border-top-left-radius: 12px;
+  border-top-right-radius: 12px;
+  cursor: move;
+}
+#penai-header h2 {
+  margin: 0;
+  font-size: 16px;
+  flex: 1;
+}
+
+/* Messages area */
+#penai-messages {
+  flex: 1;
+  padding: 15px;
+  overflow-y: auto;
+  background: var(--chat-bg);
+  border-bottom: 1px solid var(--border-color);
+}
+.penai-user,
+.penai-bot {
+  margin-bottom: 12px;
+  font-size: 14px;
+}
+.penai-user {
+  text-align: right;
+  color: #034674;
+}
+.penai-bot {
+  text-align: left;
+  color: #091825;
+}
+.penai-bot .penai-prefix {
+  color: var(--accent-color);
+}
+
+/* Input area */
+#penai-input-container {
+  display: flex;
+  padding: 10px;
+  background: #fff;
+  border-bottom-left-radius: 12px;
+  border-bottom-right-radius: 12px;
+}
+#penai-input {
+  flex: 1;
+  padding: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 5px;
+  font-size: 14px;
+  outline: none;
+}
+#penai-input:focus {
+  border-color: var(--primary-color);
+}
+#penai-send-btn {
+  margin-left: 8px;
+  padding: 8px 12px;
+  background: var(--primary-color);
+  color: var(--text-color);
+  border: none;
+  border-radius: 5px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background .2s;
+}
+#penai-send-btn:hover {
+  background: #1a2b3c;
+}
+
+/* Quick Replies */
+.quick-replies {
+  margin-top: 10px;
+  display: flex;
+  gap: 10px;
+}
+.quick-reply {
+  padding: 5px 10px;
+  background: var(--primary-color);
+  color: var(--text-color);
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.quick-reply:hover {
+  background: #1a2b3c;
+}
