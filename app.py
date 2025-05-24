@@ -35,7 +35,15 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 
 # ─── SQLite Database Setup ───────────────────────────────────────────────────
 def init_db():
-    conn = sqlite3.connect('/app/flag.db')
+    db_path = '/app/flag.db'
+    db_dir = os.path.dirname(db_path)
+    
+    # Create directory if it doesn't exist
+    if not os.path.exists(db_dir):
+        os.makedirs(db_dir, exist_ok=True)
+    
+    # Connect to database and create table
+    conn = sqlite3.connect(db_path)
     c = conn.cursor()
     c.execute('''
         CREATE TABLE IF NOT EXISTS chat_sessions (
@@ -48,6 +56,9 @@ def init_db():
         )
     ''')
     conn.commit()
+    
+    # Set file permissions to ensure write access
+    os.chmod(db_path, 0o664)
     conn.close()
 
 init_db()
@@ -793,7 +804,7 @@ STATIC_QAS = {
         "Access Parent Portal"
     ),
     "jobs": (
-        "All current staff vacancies and application details are listed on our Vacancies page. For enquiries, please contact the Director of Admissions at registrar@more photosynthetic://more-house-human.onrender.com/askhousemail.org.uk.",
+        "All current staff vacancies and application details are listed on our Vacancies page. For enquiries, please contact the Director of Admissions at registrar@morehousemail.org.uk.",
         None,
         "View Vacancies"
     ),
