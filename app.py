@@ -35,12 +35,13 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 
 # ─── SQLite Database Setup ───────────────────────────────────────────────────
 def init_db():
-    db_path = '/app/flag.db'
+    db_path = '/app/db/flag.db'
     db_dir = os.path.dirname(db_path)
     
-    # Create directory if it doesn't exist
+    # Create subdirectory if it doesn't exist
     if not os.path.exists(db_dir):
         os.makedirs(db_dir, exist_ok=True)
+        os.chmod(db_dir, 0o775)  # Ensure directory is writable
     
     # Connect to database and create table
     conn = sqlite3.connect(db_path)
@@ -1084,7 +1085,7 @@ def ask():
         key = question.lower().rstrip("?")
 
         # Check existing session
-        conn = sqlite3.connect('/app/flag.db')
+        conn = sqlite3.connect('/app/db/flag.db')
         c = conn.cursor()
         c.execute("SELECT status, human_response, bot_response FROM chat_sessions WHERE session_id = ?", (session_id,))
         session = c.fetchone()
@@ -1312,7 +1313,7 @@ def status():
         session_id = data.get("session_id")
         if not session_id:
             return jsonify(error="No session_id provided"), 400
-        conn = sqlite3.connect('/app/flag.db')
+        conn = sqlite3.connect('/app/db/flag.db')
         c = conn.cursor()
         c.execute("SELECT status, human_response, bot_response FROM chat_sessions WHERE session_id = ?", (session_id,))
         session = c.fetchone()
@@ -1364,7 +1365,7 @@ def status():
 
 @app.route("/review", methods=["GET", "POST"])
 def review():
-    conn = sqlite3.connect('/app/flag.db')
+    conn = sqlite3.connect('/app/db/flag.db')
     c = conn.cursor()
     if request.method == "GET":
         c.execute("SELECT session_id, question, status, human_response FROM chat_sessions WHERE status = 'pending'")
