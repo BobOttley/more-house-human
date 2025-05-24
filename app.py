@@ -29,7 +29,7 @@ SMTP_USER = os.getenv("SMTP_USER")
 SMTP_PASS = os.getenv("SMTP_PASS")
 MODERATOR_EMAIL = os.getenv("MODERATOR_EMAIL", "registrar@morehousemail.org.uk")
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder='static', template_folder='templates')
 CORS(app, resources={r"/ask": {"origins": "*"}, r"/status": {"origins": "*"}})
 socketio = SocketIO(app, cors_allowed_origins="*")
 
@@ -38,29 +38,35 @@ def init_db():
     db_path = '/app/db/flag.db'
     db_dir = os.path.dirname(db_path)
     
-    # Create subdirectory if it doesn't exist
-    if not os.path.exists(db_dir):
-        os.makedirs(db_dir, exist_ok=True)
-        os.chmod(db_dir, 0o775)  # Ensure directory is writable
-    
-    # Connect to database and create table
-    conn = sqlite3.connect(db_path)
-    c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS chat_sessions (
-            session_id TEXT PRIMARY KEY,
-            question TEXT NOT NULL,
-            bot_response TEXT,
-            human_response TEXT,
-            status TEXT NOT NULL DEFAULT 'bot',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    conn.commit()
-    
-    # Set file permissions to ensure write access
-    os.chmod(db_path, 0o664)
-    conn.close()
+    try:
+        # Create subdirectory if it doesn't exist
+        if not os.path.exists(db_dir):
+            os.makedirs(db_dir, exist_ok=True)
+            os.chmod(db_dir, 0o775)  # Ensure directory is writable
+            print(f"Created directory {db_dir} with permissions 775")
+        
+        # Connect to database and create table
+        conn = sqlite3.connect(db_path)
+        c = conn.cursor()
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS chat_sessions (
+                session_id TEXT PRIMARY KEY,
+                question TEXT NOT NULL,
+                bot_response TEXT,
+                human_response TEXT,
+                status TEXT NOT NULL DEFAULT 'bot',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        conn.commit()
+        
+        # Set file permissions to ensure write access
+        os.chmod(db_path, 0o664)
+        print(f"Set permissions for {db_path} to 664")
+        conn.close()
+    except Exception as e:
+        print(f"Error initializing database: {e}")
+        raise
 
 init_db()
 
