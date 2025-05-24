@@ -9,12 +9,44 @@ document.addEventListener("DOMContentLoaded", () => {
   const sendBtn    = document.getElementById("penai-send-btn");
   const header     = document.getElementById("penai-header");
   const ASK_URL    = "https://more-house-human.onrender.com/ask";
-  const STATUS_URL = "https://more-house-human.onrender.com/status";
 
   if (!toggle || !chatbox || !msgs || !input || !sendBtn || !header) {
     console.error("Missing chat UI elements");
     return;
   }
+
+  // ─── SocketIO setup ──────────────────────────────────────────
+  const socket = io("https://more-house-human.onrender.com");
+  let sessionId = null;
+
+  socket.on("connect", () => {
+    console.log("Connected to SocketIO server");
+  });
+
+  socket.on("joined", (data) => {
+    console.log(`Joined room: ${data.session_id}`);
+  });
+
+  socket.on("bot_response", (data) => {
+    sessionId = data.session_id;
+    socket.emit("join", { session_id: sessionId });
+    const html = renderParagraphs(data.answer.replace(/(https?:\/\/[^\s]+)/g,
+      '<a href="$1" target="_blank">$1</a>'
+    )) + (data.url && data.link_label ? `<p><a href="${data.url}" target="_blank">${data.link_label}</a></p>` : "");
+    renderBot(html, data.source, false, detectCategory(data.answer));
+  });
+
+  socket.on("system_alert", (data) => {
+    sessionId = data.session_id;
+    socket.emit("join", { session_id: sessionId });
+    const html = renderParagraphs(data.answer);
+    renderBot(html, data.source, false, "admissions");
+  });
+
+  socket.on("human_response", (data) => {
+    const html = renderParagraphs(data.answer);
+    renderBot(html, data.source, false, "admissions");
+  });
 
   // ─── State ────────────────────────────────────────────────────
   let chatHistory       = [];          // stores {type, text, source}
@@ -22,7 +54,6 @@ document.addEventListener("DOMContentLoaded", () => {
   const usedQueries     = new Set();   // tracks which shortcut queries have been used
   let thinkingDiv       = null;
   let currentController = null;
-  let sessionId         = null;
 
   // ─── Quick-replies grouped by category ────────────────────────
   const quickByCat = {
@@ -125,7 +156,7 @@ document.addEventListener("DOMContentLoaded", () => {
     d.innerHTML = `<strong><span class="penai-prefix">${prefix}</span></strong> ${html}`;
     msgs.appendChild(d);
 
-    if (source !== "system" && source !== "human") {
+    if (source === "bot") {
       const cats       = Object.keys(quickByCat);
       const inCat      = quickByCat[category] || quickByCat.admissions;
       const outCat     = cats.filter(c => c !== category).flatMap(c => quickByCat[c]);
@@ -164,30 +195,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  // ─── Polling for human response ───────────────────────────────
-  function startPolling() {
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch(STATUS_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ session_id: sessionId })
-        });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        if (data.source === "human") {
-          const html = renderParagraphs(data.answer);
-          renderBot(html, "human", false, "admissions");
-          clearInterval(interval);
-        } else if (data.source !== "system") {
-          clearInterval(interval);
-        }
-      } catch (err) {
-        console.error("Polling error:", err);
-      }
-    }, 5000);
-  }
-
   // ─── Send question (with abort on close) ──────────────────────
   async function sendQuestion(question, isWelcome = false) {
     if (currentController) currentController.abort();
@@ -211,18 +218,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       sessionId = data.session_id;
       usedQueries.add(question);
-
-      let linked = data.answer.replace(/(https?:\/\/[^\s]+)/g,
-        '<a href="$1" target="_blank">$1</a>'
-      );
-      let html = renderParagraphs(linked);
-      if (data.url && data.link_label) {
-        html += `<p><a href="${data.url}" target="_blank">${data.link_label}</a></p>`;
-      }
-
-      const cat = detectCategory(data.answer);
-      renderBot(html, data.source, isWelcome, cat);
-      if (data.source === "system") startPolling();
+      socket.emit("join", { session_id: sessionId });
 
     } catch (err) {
       if (err.name === "AbortError") {
