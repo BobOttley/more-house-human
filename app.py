@@ -3,7 +3,6 @@ import os
 import pickle
 import traceback
 import sqlite3
-import smtplib
 import logging
 from datetime import date, datetime
 import pytz
@@ -14,7 +13,6 @@ from flask_cors import CORS, cross_origin
 from flask_socketio import SocketIO, emit
 from dotenv import load_dotenv
 from fuzzywuzzy import fuzz
-from email.mime.text import MIMEText
 import uuid
 
 # Configure logging
@@ -28,13 +26,6 @@ if not openai.api_key:
     logger.error("OPENAI_API_KEY not set in .env")
     raise RuntimeError("OPENAI_API_KEY not set in .env")
 
-# SMTP configuration for alerts
-SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
-SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
-SMTP_USER = os.getenv("SMTP_USER")
-SMTP_PASS = os.getenv("SMTP_PASS")
-MODERATOR_EMAIL = os.getenv("MODERATOR_EMAIL", "registrar@morehousemail.org.uk")
-
 app = Flask(__name__, static_folder='static', template_folder='templates')
 CORS(app, resources={r"/ask": {"origins": "*"}, r"/status": {"origins": "*"}})
 socketio = SocketIO(app, cors_allowed_origins="*")
@@ -45,7 +36,6 @@ def init_db():
     db_dir = os.path.dirname(db_path)
     
     try:
-        # Create subdirectory if it doesn't exist
         if not os.path.exists(db_dir):
             os.makedirs(db_dir, exist_ok=True)
             os.chmod(db_dir, 0o775)
@@ -53,7 +43,6 @@ def init_db():
         else:
             logger.info(f"Directory {db_dir} already exists")
         
-        # Connect to database and create table
         conn = sqlite3.connect(db_path)
         c = conn.cursor()
         c.execute('''
@@ -68,7 +57,6 @@ def init_db():
         ''')
         conn.commit()
         
-        # Set file permissions
         os.chmod(db_path, 0o664)
         logger.info(f"Set permissions for {db_path} to 664")
         conn.close()
@@ -1045,27 +1033,6 @@ def needs_human_takeover(question, sim_score=None):
     low_confidence = sim_score is not None and sim_score < 0.7
     return scheduled or keyword_trigger or low_confidence
 
-# ─── Send email alert ─────────────────────────────────────────────────────────
-def send_alert_email(question, session_id):
-    if not all([SMTP_SERVER, SMTP_USER, SMTP_PASS, MODERATOR_EMAIL]):
-        logger.warning("SMTP configuration missing; skipping email alert")
-        return
-    msg = MIMEText(
-        f"A new query requires human review.\n\nQuestion: {question}\nSession ID: {session_id}\n"
-        f"Please review at https://more-house-human.onrender.com/review"
-    )
-    msg["Subject"] = "More House Chatbot: Human Review Required"
-    msg["From"] = SMTP_USER
-    msg["To"] = MODERATOR_EMAIL
-    try:
-        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-            server.starttls()
-            server.login(SMTP_USER, SMTP_PASS)
-            server.send_message(msg)
-        logger.info(f"Sent email alert for session {session_id}")
-    except Exception as e:
-        logger.error(f"Failed to send email alert: {str(e)}")
-
 def cosine_similarities(matrix, vector):
     dot = matrix @ vector
     norms = np.linalg.norm(matrix, axis=1) * np.linalg.norm(vector)
@@ -1118,7 +1085,6 @@ def ask():
 
         key = question.lower().rstrip("?")
 
-        # Check existing session
         conn = sqlite3.connect('/tmp/db/flag.db')
         c = conn.cursor()
         c.execute("SELECT status, human_response, bot_response FROM chat_sessions WHERE session_id = ?", (session_id,))
@@ -1158,7 +1124,6 @@ def ask():
                 session_id=session_id
             ), 200
 
-        # 1) Exact static
         if key in STATIC_QAS:
             raw, url, label = STATIC_QAS[key]
             c.execute(
@@ -1183,7 +1148,6 @@ def ask():
                 session_id=session_id
             ), 200
 
-        # 2) Fuzzy static
         for sk, (raw, url, label) in STATIC_QAS.items():
             if fuzz.partial_ratio(sk, key) > 80:
                 c.execute(
@@ -1208,7 +1172,6 @@ def ask():
                     session_id=session_id
                 ), 200
 
-        # 3) Welcome (custom — no “Thank you for your question!”)
         if question == "__welcome__":
             raw = (
                 "Hi there! Ask me anything about More House School.\n\n"
@@ -1237,7 +1200,6 @@ def ask():
                 session_id=session_id
             ), 200
 
-        # 4) Guard “how many…”
         if key.startswith("how many"):
             raw = "I'm sorry, I don't have that information."
             c.execute(
@@ -1262,7 +1224,6 @@ def ask():
                 session_id=session_id
             ), 200
 
-        # 5) Keyword → URL
         relevant_url = None
         for k, u in PAGE_LINKS.items():
             if k in key or any(
@@ -1271,7 +1232,6 @@ def ask():
                 relevant_url = u
                 break
 
-        # 6) RAG fallback
         emb = openai.embeddings.create(model=EMB_MODEL, input=question)
         q_vec = np.array(emb.data[0].embedding, dtype="float32")
         sims = cosine_similarities(embeddings, q_vec)
@@ -1289,7 +1249,6 @@ def ask():
         )
         raw = chat.choices[0].message.content
 
-        # Check for human takeover
         if needs_human_takeover(question, top_sim):
             c.execute(
                 "INSERT OR REPLACE INTO chat_sessions (session_id, question, bot_response, status) VALUES (?, ?, ?, ?)",
@@ -1297,7 +1256,7 @@ def ask():
             )
             conn.commit()
             conn.close()
-            send_alert_email(question, session_id)
+            logger.info(f"Flagged question for human review: session {session_id}, question: {question}")
             socketio.emit("system_alert", {
                 "session_id": session_id,
                 "answer": "Your question has been flagged for human review. A member of our team will respond soon.",
@@ -1305,7 +1264,6 @@ def ask():
                 "link_label": None,
                 "source": "system"
             }, room=session_id)
-            logger.info(f"Flagged for human review: session {session_id}")
             return jsonify(
                 answer="Your question has been flagged for human review. A member of our team will respond soon.",
                 url=None,
@@ -1314,7 +1272,6 @@ def ask():
                 session_id=session_id
             ), 200
 
-        # Store bot response
         c.execute(
             "INSERT OR REPLACE INTO chat_sessions (session_id, question, bot_response, status) VALUES (?, ?, ?, ?)",
             (session_id, question, raw, "bot")
