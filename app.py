@@ -4,6 +4,7 @@ import pickle
 import traceback
 import sqlite3
 import smtplib
+import logging
 from datetime import date, datetime
 import pytz
 import numpy as np
@@ -16,10 +17,15 @@ from fuzzywuzzy import fuzz
 from email.mime.text import MIMEText
 import uuid
 
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
 # ─── Initialise ──────────────────────────────────────────────────────────────
 load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
 if not openai.api_key:
+    logger.error("OPENAI_API_KEY not set in .env")
     raise RuntimeError("OPENAI_API_KEY not set in .env")
 
 # SMTP configuration for alerts
@@ -35,15 +41,17 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 
 # ─── SQLite Database Setup ───────────────────────────────────────────────────
 def init_db():
-    db_path = '/app/db/flag.db'
+    db_path = '/tmp/db/flag.db'
     db_dir = os.path.dirname(db_path)
     
     try:
         # Create subdirectory if it doesn't exist
         if not os.path.exists(db_dir):
             os.makedirs(db_dir, exist_ok=True)
-            os.chmod(db_dir, 0o775)  # Ensure directory is writable
-            print(f"Created directory {db_dir} with permissions 775")
+            os.chmod(db_dir, 0o775)
+            logger.info(f"Created directory {db_dir} with permissions 775")
+        else:
+            logger.info(f"Directory {db_dir} already exists")
         
         # Connect to database and create table
         conn = sqlite3.connect(db_path)
@@ -60,15 +68,20 @@ def init_db():
         ''')
         conn.commit()
         
-        # Set file permissions to ensure write access
+        # Set file permissions
         os.chmod(db_path, 0o664)
-        print(f"Set permissions for {db_path} to 664")
+        logger.info(f"Set permissions for {db_path} to 664")
         conn.close()
+        logger.info(f"Successfully initialized database at {db_path}")
     except Exception as e:
-        print(f"Error initializing database: {e}")
+        logger.error(f"Error initializing database at {db_path}: {str(e)}")
         raise
 
-init_db()
+try:
+    init_db()
+except Exception as e:
+    logger.error(f"Failed to initialize database: {str(e)}")
+    raise
 
 # ─── URL lookup ───────────────────────────────────────────────────────────────
 PAGE_LINKS = {
@@ -993,10 +1006,21 @@ STATIC_QAS = {
 }
 
 # ─── Load embeddings & metadata ───────────────────────────────────────────────
-with open("/app/embeddings.pkl", "rb") as f:
-    embeddings = np.stack(pickle.load(f), axis=0)
-with open("/app/metadata.pkl", "rb") as f:
-    metadata = pickle.load(f)
+try:
+    with open("/app/embeddings.pkl", "rb") as f:
+        embeddings = np.stack(pickle.load(f), axis=0)
+    logger.info("Loaded embeddings.pkl")
+except Exception as e:
+    logger.error(f"Failed to load embeddings.pkl: {str(e)}")
+    raise
+
+try:
+    with open("/app/metadata.pkl", "rb") as f:
+        metadata = pickle.load(f)
+    logger.info("Loaded metadata.pkl")
+except Exception as e:
+    logger.error(f"Failed to load metadata.pkl: {str(e)}")
+    raise
 
 EMB_MODEL = "text-embedding-3-small"
 CHAT_MODEL = "gpt-3.5-turbo"
@@ -1016,18 +1040,15 @@ SENSITIVE_KEYWORDS = ["bullying", "emergency", "harassment", "safeguarding issue
 def needs_human_takeover(question, sim_score=None):
     now = datetime.now(pytz.timezone("Europe/London"))
     hour = now.hour
-    # Scheduled intervention: 9am–5pm BST
     scheduled = 9 <= hour < 17
-    # Keyword trigger
     keyword_trigger = any(keyword in question.lower() for keyword in SENSITIVE_KEYWORDS)
-    # Low confidence trigger (if sim_score provided)
     low_confidence = sim_score is not None and sim_score < 0.7
     return scheduled or keyword_trigger or low_confidence
 
 # ─── Send email alert ─────────────────────────────────────────────────────────
 def send_alert_email(question, session_id):
     if not all([SMTP_SERVER, SMTP_USER, SMTP_PASS, MODERATOR_EMAIL]):
-        print("SMTP configuration missing; skipping email alert")
+        logger.warning("SMTP configuration missing; skipping email alert")
         return
     msg = MIMEText(
         f"A new query requires human review.\n\nQuestion: {question}\nSession ID: {session_id}\n"
@@ -1041,8 +1062,9 @@ def send_alert_email(question, session_id):
             server.starttls()
             server.login(SMTP_USER, SMTP_PASS)
             server.send_message(msg)
+        logger.info(f"Sent email alert for session {session_id}")
     except Exception as e:
-        print(f"Failed to send email alert: {e}")
+        logger.error(f"Failed to send email alert: {str(e)}")
 
 def cosine_similarities(matrix, vector):
     dot = matrix @ vector
@@ -1076,7 +1098,12 @@ def format_response(ans, is_human=False):
 
 @app.route("/", methods=["GET"])
 def home():
-    return render_template("index.html")
+    try:
+        logger.info("Serving index.html")
+        return render_template("index.html")
+    except Exception as e:
+        logger.error(f"Error serving index.html: {str(e)}")
+        return jsonify(error="Failed to load homepage"), 500
 
 @app.route("/ask", methods=["POST"])
 @cross_origin()
@@ -1086,12 +1113,13 @@ def ask():
         question = data.get("question", "").strip()
         session_id = data.get("session_id", str(uuid.uuid4()))
         if not question:
+            logger.warning("No question provided in /ask")
             return jsonify(error="No question provided"), 400
 
         key = question.lower().rstrip("?")
 
         # Check existing session
-        conn = sqlite3.connect('/app/db/flag.db')
+        conn = sqlite3.connect('/tmp/db/flag.db')
         c = conn.cursor()
         c.execute("SELECT status, human_response, bot_response FROM chat_sessions WHERE session_id = ?", (session_id,))
         session = c.fetchone()
@@ -1104,6 +1132,7 @@ def ask():
                 "link_label": None,
                 "source": "human"
             }, room=session_id)
+            logger.info(f"Returning human response for session {session_id}")
             return jsonify(
                 answer=format_response(session[1], is_human=True),
                 url=None,
@@ -1120,6 +1149,7 @@ def ask():
                 "link_label": None,
                 "source": "system"
             }, room=session_id)
+            logger.info(f"Session {session_id} is pending human review")
             return jsonify(
                 answer="Your question has been flagged for human review. A member of our team will respond soon.",
                 url=None,
@@ -1144,6 +1174,7 @@ def ask():
                 "link_label": label,
                 "source": "bot"
             }, room=session_id)
+            logger.info(f"Answered with exact static QA for session {session_id}")
             return jsonify(
                 answer=format_response(remove_bullets(raw)),
                 url=url,
@@ -1168,6 +1199,7 @@ def ask():
                     "link_label": label,
                     "source": "bot"
                 }, room=session_id)
+                logger.info(f"Answered with fuzzy static QA for session {session_id}")
                 return jsonify(
                     answer=format_response(remove_bullets(raw)),
                     url=url,
@@ -1196,6 +1228,7 @@ def ask():
                 "link_label": "Enquire now",
                 "source": "bot"
             }, room=session_id)
+            logger.info(f"Sent welcome message for session {session_id}")
             return jsonify(
                 answer=remove_bullets(raw),
                 url=PAGE_LINKS["enquiry"],
@@ -1220,6 +1253,7 @@ def ask():
                 "link_label": None,
                 "source": "bot"
             }, room=session_id)
+            logger.info(f"Guarded 'how many' question for session {session_id}")
             return jsonify(
                 answer=format_response(raw),
                 url=None,
@@ -1271,6 +1305,7 @@ def ask():
                 "link_label": None,
                 "source": "system"
             }, room=session_id)
+            logger.info(f"Flagged for human review: session {session_id}")
             return jsonify(
                 answer="Your question has been flagged for human review. A member of our team will respond soon.",
                 url=None,
@@ -1299,6 +1334,7 @@ def ask():
             "link_label": link_label,
             "source": "bot"
         }, room=session_id)
+        logger.info(f"Answered with RAG for session {session_id}")
         return jsonify(
             answer=answer,
             url=relevant_url,
@@ -1308,6 +1344,7 @@ def ask():
         ), 200
 
     except Exception as e:
+        logger.error(f"Error in /ask: {str(e)}")
         traceback.print_exc()
         return jsonify(error=str(e)), 500
 
@@ -1318,13 +1355,15 @@ def status():
         data = request.get_json(force=True)
         session_id = data.get("session_id")
         if not session_id:
+            logger.warning("No session_id provided in /status")
             return jsonify(error="No session_id provided"), 400
-        conn = sqlite3.connect('/app/db/flag.db')
+        conn = sqlite3.connect('/tmp/db/flag.db')
         c = conn.cursor()
         c.execute("SELECT status, human_response, bot_response FROM chat_sessions WHERE session_id = ?", (session_id,))
         session = c.fetchone()
         conn.close()
         if not session:
+            logger.warning(f"Session {session_id} not found")
             return jsonify(error="Session not found"), 404
         status, human_response, bot_response = session
         if status == "human" and human_response:
@@ -1335,6 +1374,7 @@ def status():
                 "link_label": None,
                 "source": "human"
             }, room=session_id)
+            logger.info(f"Returned human response for session {session_id}")
             return jsonify(
                 answer=format_response(human_response, is_human=True),
                 url=None,
@@ -1350,6 +1390,7 @@ def status():
                 "link_label": None,
                 "source": "system"
             }, room=session_id)
+            logger.info(f"Session {session_id} is pending review")
             return jsonify(
                 answer="Your question is still under human review. Please check back soon.",
                 url=None,
@@ -1358,6 +1399,7 @@ def status():
                 session_id=session_id
             ), 200
         else:
+            logger.info(f"Returned bot response for session {session_id}")
             return jsonify(
                 answer=format_response(bot_response),
                 url=None,
@@ -1366,50 +1408,60 @@ def status():
                 session_id=session_id
             ), 200
     except Exception as e:
+        logger.error(f"Error in /status: {str(e)}")
         traceback.print_exc()
         return jsonify(error=str(e)), 500
 
 @app.route("/review", methods=["GET", "POST"])
 def review():
-    conn = sqlite3.connect('/app/db/flag.db')
-    c = conn.cursor()
-    if request.method == "GET":
-        c.execute("SELECT session_id, question, status, human_response FROM chat_sessions WHERE status = 'pending'")
-        sessions = c.fetchall()
-        conn.close()
-        return render_template("review.html", sessions=sessions)
-    else:
-        data = request.form
-        session_id = data.get("session_id")
-        human_response = data.get("human_response")
-        if not session_id or not human_response:
+    try:
+        conn = sqlite3.connect('/tmp/db/flag.db')
+        c = conn.cursor()
+        if request.method == "GET":
+            c.execute("SELECT session_id, question, status, human_response FROM chat_sessions WHERE status = 'pending'")
+            sessions = c.fetchall()
             conn.close()
-            return jsonify(error="Missing session_id or human_response"), 400
-        c.execute(
-            "UPDATE chat_sessions SET human_response = ?, status = ? WHERE session_id = ?",
-            (human_response, "human", session_id)
-        )
-        conn.commit()
-        conn.close()
-        socketio.emit("human_response", {
-            "session_id": session_id,
-            "answer": format_response(human_response, is_human=True),
-            "url": None,
-            "link_label": None,
-            "source": "human"
-        }, room=session_id)
-        return jsonify(success="Response submitted"), 200
+            logger.info("Served review.html with pending sessions")
+            return render_template("review.html", sessions=sessions)
+        else:
+            data = request.form
+            session_id = data.get("session_id")
+            human_response = data.get("human_response")
+            if not session_id or not human_response:
+                conn.close()
+                logger.warning("Missing session_id or human_response in /review POST")
+                return jsonify(error="Missing session_id or human_response"), 400
+            c.execute(
+                "UPDATE chat_sessions SET human_response = ?, status = ? WHERE session_id = ?",
+                (human_response, "human", session_id)
+            )
+            conn.commit()
+            conn.close()
+            socketio.emit("human_response", {
+                "session_id": session_id,
+                "answer": format_response(human_response, is_human=True),
+                "url": None,
+                "link_label": None,
+                "source": "human"
+            }, room=session_id)
+            logger.info(f"Submitted human response for session {session_id}")
+            return jsonify(success="Response submitted"), 200
+    except Exception as e:
+        logger.error(f"Error in /review: {str(e)}")
+        traceback.print_exc()
+        return jsonify(error=str(e)), 500
 
 @socketio.on("connect")
 def handle_connect():
-    print("Client connected")
+    logger.info("Client connected")
 
 @socketio.on("join")
 def handle_join(data):
     session_id = data.get("session_id")
     if session_id:
-        print(f"Client joined room: {session_id}")
+        logger.info(f"Client joined room: {session_id}")
         emit("joined", {"session_id": session_id}, room=session_id)
 
 if __name__ == "__main__":
+    logger.info("Starting Flask-SocketIO server")
     socketio.run(app, host="0.0.0.0", port=5000)
