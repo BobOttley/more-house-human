@@ -1025,13 +1025,13 @@ def review():
 
 # SocketIO handler
 @socketio.on('message')
-def handle_message(data):
-    try:
-        question = data.get('message', '').strip()
-        session_id = data.get('session_id', '')
-        if not question or not session_id:
-            emit('response', {'message': 'Invalid input'})
-            return
+for q, (answer, link, label) in STATIC_QAS.items():
+    if fuzz.ratio(question.lower(), q.lower()) > 70:  # Lowered from 80
+        response = answer
+        if link:
+            response += f' <a href="{link}" target="_blank">{label}</a>'
+        emit('response', {'message': response})
+        return
 
         # Check BST time for human review
         bst = pytz.timezone('Europe/London')
