@@ -1044,7 +1044,7 @@ def handle_message(data):
         # Handle sensitive questions
         if any(keyword in question.lower() for keyword in sensitive_keywords):
             if True:  # Disable time check for now
-                conn = sqlite3.connect('/tmp/db/flag.db')
+                conn = sqlite3.connect('/data/flag.db')
                 conn.execute("INSERT INTO flagged_questions (session_id, question, timestamp) VALUES (?, ?, ?)",
                              (session_id, question, current_time.isoformat()))
                 conn.commit()
