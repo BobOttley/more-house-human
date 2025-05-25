@@ -995,7 +995,7 @@ STATIC_QAS = {
 
 # ─── Load embeddings & metadata ───────────────────────────────────────────────
 try:
-    with open("/app/embeddings.pkl", "rb") as f:
+    with open("./embeddings.pkl", "rb") as f:
         embeddings = np.stack(pickle.load(f), axis=0)
     logger.info("Loaded embeddings.pkl")
 except Exception as e:
@@ -1003,7 +1003,7 @@ except Exception as e:
     raise
 
 try:
-    with open("/app/metadata.pkl", "rb") as f:
+    with open("./metadata.pkl", "rb") as f:
         metadata = pickle.load(f)
     logger.info("Loaded metadata.pkl")
 except Exception as e:
