@@ -1006,7 +1006,7 @@ def get_rag_response(question):
 @app.route('/review', methods=['GET', 'POST'])
 def review():
     try:
-        conn = sqlite3.connect('flag.db')  # ✅ Local DB file
+        conn = sqlite3.connect('/data/flag.db')  # ✅ Local DB file
         if request.method == 'POST':
             session_id = request.form.get('session_id')
             human_response = request.form.get('human_response')
