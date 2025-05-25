@@ -1,5 +1,6 @@
+# --- Setup: Load Required Libraries ---
 import eventlet
-eventlet.monkey_patch()  # Must be first to avoid monkey-patching errors
+eventlet.monkey_patch()  # Ensure this is first
 
 import os
 import sqlite3
@@ -7,43 +8,48 @@ import pickle
 import numpy as np
 from datetime import datetime
 import pytz
+
 from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 from fuzzywuzzy import fuzz
 from openai import OpenAI
 
-# Initialize Flask app
+# --- Initialize Flask App ---
 app = Flask(__name__)
 CORS(app)
 socketio = SocketIO(app, async_mode='eventlet')
 
-# Configuration
+# --- Configuration ---
 app.config['SECRET_KEY'] = os.urandom(24).hex()
 app.config['STATIC_FOLDER'] = 'static'
 
-# Load embeddings and metadata
+# --- Load AI Embeddings and Metadata ---
 try:
-    with open('./embeddings.pkl', 'rb') as f:
+    with open('embeddings.pkl', 'rb') as f:
         embeddings = np.stack(pickle.load(f), axis=0)
-    with open('./metadata.pkl', 'rb') as f:
+    with open('metadata.pkl', 'rb') as f:
         metadata = pickle.load(f)
-    app.logger.info("Successfully loaded embeddings.pkl and metadata.pkl")
+    app.logger.info("✅ Successfully loaded AI data (embeddings & metadata)")
 except Exception as e:
-    app.logger.error(f"Error loading embeddings/metadata: {e}")
+    app.logger.error(f"❌ Error loading embeddings or metadata: {e}")
     raise
 
-# Initialize SQLite database
+# --- Initialize SQLite Database for Human Review Flags ---
 try:
-    os.makedirs('/tmp/db', exist_ok=True, mode=0o775)
-    conn = sqlite3.connect('/tmp/db/flag.db')
-    conn.execute('''CREATE TABLE IF NOT EXISTS flagged_questions
-                   (session_id TEXT, question TEXT, timestamp TEXT)''')
+    conn = sqlite3.connect('flag.db')  # Changed from /tmp/db to project directory
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS flagged_questions (
+            session_id TEXT,
+            question TEXT,
+            timestamp TEXT
+        )
+    ''')
     conn.commit()
     conn.close()
-    app.logger.info("Database initialized at /tmp/db/flag.db")
+    app.logger.info("✅ Database 'flag.db' initialized successfully")
 except Exception as e:
-    app.logger.error(f"Error initializing database: {e}")
+    app.logger.error(f"❌ Error initializing database: {e}")
     raise
 
 # URL lookup
@@ -1045,7 +1051,7 @@ def handle_message(data):
 
         # Handle sensitive questions
         if any(keyword in question.lower() for keyword in sensitive_keywords):
-            if 9 <= current_hour < 17:
+            if True:  # Disable time check for now
                 conn = sqlite3.connect('/tmp/db/flag.db')
                 conn.execute("INSERT INTO flagged_questions (session_id, question, timestamp) VALUES (?, ?, ?)",
                              (session_id, question, current_time.isoformat()))
