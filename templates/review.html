@@ -1,0 +1,34 @@
+mkdir -p templates
+cat > templates/review.html << 'EOF'
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Review Flagged Questions</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        h1 { color: #333; }
+        .session { border: 1px solid #ccc; padding: 10px; margin-bottom: 10px; }
+        textarea { width: 100%; height: 100px; }
+        button { margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <h1>Flagged Questions for Review</h1>
+    {% if sessions %}
+        {% for session in sessions %}
+            <div class="session">
+                <p><strong>Session ID:</strong> {{ session[0] }}</p>
+                <p><strong>Question:</strong> {{ session[1] }}</p>
+                <form action="/review" method="POST">
+                    <input type="hidden" name="session_id" value="{{ session[0] }}">
+                    <textarea name="human_response" required placeholder="Enter your response"></textarea>
+                    <button type="submit">Submit Response</button>
+                </form>
+            </div>
+        {% endfor %}
+    {% else %}
+        <p>No pending questions for review.</p>
+    {% endif %}
+</body>
+</html>
+EOF

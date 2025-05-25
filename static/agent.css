@@ -1,8 +1,0 @@
-body { margin:0; font-family: sans-serif }
-#sidebar { position: fixed; left: 0; top: 0; bottom: 0; width: 25%; border-right:1px solid #ccc; padding:8px; overflow-y:auto; }
-#chat-panel { margin-left: 25%; padding:8px; }
-#chat-header { margin-bottom:8px; }
-#messages p { margin:4px 0; }
-.status-dot { display:inline-block; width:10px; height:10px; border-radius:50%; background:grey; }
-.status-dot.amber { background:orange; }
-.status-dot.red   { background:red; }

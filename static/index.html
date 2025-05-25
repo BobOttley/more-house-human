@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>More House Admissions Chatbot</title>
+  <link rel="stylesheet" href="/static/chatbot.css">
+</head>
+<body>
+  <div id="penai-toggle">💬</div>
+
+  <div id="penai-chatbox">
+    <div id="penai-header" class="draggable">
+      <h2>Chat with PEN.ai</h2>
+    </div>
+    <div id="penai-messages"></div>
+    <div id="penai-input-container">
+      <input id="penai-input" placeholder="Ask a question…" autocomplete="off"/>
+      <button id="penai-send-btn">Send</button>
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+  <script src="/static/script.js"></script>
+</body>
+</html>
