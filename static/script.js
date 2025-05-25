@@ -16,6 +16,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // ─── SocketIO setup ──────────────────────────────────────────
   const socket = io("/", { transports: ['websocket'] });
+  const sessionId = 'user-' + Math.random().toString(36).substr(2, 9);
 
   socket.on("connect", () => {
     console.log("Connected to SocketIO server");
@@ -27,6 +28,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   socket.on("response", (data) => {
+    removeThinking();
     const html = renderParagraphs(data.message.replace(/(https?:\/\/[^\s]+)/g,
       '<a href="$1" target="_blank">$1</a>'
     ));
@@ -34,11 +36,10 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   // ─── State ────────────────────────────────────────────────────
-  let chatHistory = [];          // stores {type, text, source}
+  let chatHistory = [];
   let welcomed = false;
-  const usedQueries = new Set(); // tracks which shortcut queries have been used
+  const usedQueries = new Set();
   let thinkingDiv = null;
-  const sessionId = 'user-' + Math.random().toString(36).substr(2, 9);
 
   // ─── Quick-replies grouped by category ────────────────────────
   const quickByCat = {
@@ -186,7 +187,6 @@ document.addEventListener("DOMContentLoaded", () => {
       renderUser(question);
       showThinking();
     }
-
     socket.emit('message', { message: question, session_id: sessionId });
   }
 
@@ -198,7 +198,8 @@ document.addEventListener("DOMContentLoaded", () => {
     } else {
       chatbox.style.display = "flex";
       if (!welcomed) {
-        sendQuestion("Hello! How can I assist you with More House School today?", true);
+        const welcomeMsg = "Welcome to More House School! How can I assist you today? Try asking about admissions, fees, or term dates.";
+        renderBot(welcomeMsg, "bot", true, "admissions");
         welcomed = true;
       } else {
         loadHistory();
