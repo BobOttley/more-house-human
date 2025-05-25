@@ -2,13 +2,12 @@ console.log("🚀 script.js loaded");
 
 document.addEventListener("DOMContentLoaded", () => {
   // ─── UI refs ─────────────────────────────────────────────────
-  const toggle     = document.getElementById("penai-toggle");
-  const chatbox    = document.getElementById("penai-chatbox");
-  const msgs       = document.getElementById("penai-messages");
-  const input      = document.getElementById("penai-input");
-  const sendBtn    = document.getElementById("penai-send-btn");
-  const header     = document.getElementById("penai-header");
-  const ASK_URL    = "https://more-house-human.onrender.com/ask";
+  const toggle = document.getElementById("penai-toggle");
+  const chatbox = document.getElementById("penai-chatbox");
+  const msgs = document.getElementById("penai-messages");
+  const input = document.getElementById("penai-input");
+  const sendBtn = document.getElementById("penai-send-btn");
+  const header = document.getElementById("penai-header");
 
   if (!toggle || !chatbox || !msgs || !input || !sendBtn || !header) {
     console.error("Missing chat UI elements");
@@ -16,81 +15,67 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // ─── SocketIO setup ──────────────────────────────────────────
-  const socket = io("https://more-house-human.onrender.com");
-  let sessionId = null;
+  const socket = io("/", { transports: ['websocket'] });
 
   socket.on("connect", () => {
     console.log("Connected to SocketIO server");
   });
 
-  socket.on("joined", (data) => {
-    console.log(`Joined room: ${data.session_id}`);
+  socket.on("connect_error", (error) => {
+    console.error("SocketIO connection error:", error);
+    renderBot("Connection error. Please try again.", "bot", false, "admissions");
   });
 
-  socket.on("bot_response", (data) => {
-    sessionId = data.session_id;
-    socket.emit("join", { session_id: sessionId });
-    const html = renderParagraphs(data.answer.replace(/(https?:\/\/[^\s]+)/g,
+  socket.on("response", (data) => {
+    const html = renderParagraphs(data.message.replace(/(https?:\/\/[^\s]+)/g,
       '<a href="$1" target="_blank">$1</a>'
-    )) + (data.url && data.link_label ? `<p><a href="${data.url}" target="_blank">${data.link_label}</a></p>` : "");
-    renderBot(html, data.source, false, detectCategory(data.answer));
-  });
-
-  socket.on("system_alert", (data) => {
-    sessionId = data.session_id;
-    socket.emit("join", { session_id: sessionId });
-    const html = renderParagraphs(data.answer);
-    renderBot(html, data.source, false, "admissions");
-  });
-
-  socket.on("human_response", (data) => {
-    const html = renderParagraphs(data.answer);
-    renderBot(html, data.source, false, "admissions");
+    ));
+    renderBot(html, "bot", false, detectCategory(data.message));
   });
 
   // ─── State ────────────────────────────────────────────────────
-  let chatHistory       = [];          // stores {type, text, source}
-  let welcomed          = false;       
-  const usedQueries     = new Set();   // tracks which shortcut queries have been used
-  let thinkingDiv       = null;
-  let currentController = null;
+  let chatHistory = [];          // stores {type, text, source}
+  let welcomed = false;
+  const usedQueries = new Set(); // tracks which shortcut queries have been used
+  let thinkingDiv = null;
+  const sessionId = 'user-' + Math.random().toString(36).substr(2, 9);
 
   // ─── Quick-replies grouped by category ────────────────────────
   const quickByCat = {
     admissions: [
       { label: "Enquire now", query: "enquiry" },
-      { label: "Fees",        query: "What are the school fees?" },
-      { label: "Deadlines",   query: "What are the registration deadlines?" }
+      { label: "Fees", query: "What are the school fees?" },
+      { label: "Deadlines", query: "What are the registration deadlines?" }
     ],
     lunch: [
-      { label: "Lunch menu",  query: "Where can I find the school lunch menu?" }
+      { label: "Lunch menu", query: "Where can I find the school lunch menu?" }
     ],
     calendar: [
-      { label: "Term dates",  query: "What are the term dates?" },
+      { label: "Term dates", query: "What are the term dates?" },
       { label: "Open events", query: "What are the open events?" }
     ],
     uniform: [
-      { label: "Uniform",     query: "What is the school uniform?" }
+      { label: "Uniform", query: "What is the school uniform?" }
     ],
     scholarships: [
       { label: "Bursaries & scholarships", query: "Tell me about scholarships and bursaries" }
     ],
     contact: [
-      { label: "Contact us",  query: "How can I contact the school?" }
+      { label: "Contact us", query: "How can I contact the school?" }
     ],
     academics: [
-      { label: "Academic life",               query: "What is academic life like?" },
-      { label: "Subjects offered",            query: "Which subjects do you offer?" },
-      { label: "Sixth Form",                  query: "Tell me about the sixth form" }
+      { label: "Academic life", query: "What is academic life like?" },
+      { label: "Subjects offered", query: "Which subjects do you offer?" },
+      { label: "Sixth Form", query: "Tell me about the sixth form" }
     ],
     extracurricular: [
-      { label: "Co-curricular activities",    query: "What extracurricular activities do you offer?" },
-      { label: "Sport",                       query: "What sports do you offer?" },
-      { label: "Faith Life",                  query: "Tell me about faith life" }
+      { label: "Co-curricular activities", query: "What extracurricular activities do you offer?" },
+      { label: "Sport", query: "What sports do you offer?" },
+      { label: "Faith Life", query: "Tell me about faith life" }
     ],
     policies: [
-      { label: "Policies",    query: "policies" },
-      { label: "Safeguarding",query: "safeguarding" }
+      { label: "Policies", query: "policies" },
+      { label: "Safeguarding", query: "safeguarding" }
     ]
   };
 
@@ -105,14 +90,14 @@ document.addEventListener("DOMContentLoaded", () => {
   function detectCategory(text) {
     const t = text.toLowerCase();
     if (/(register|registration|admission|fee|prospectus)/.test(t)) return "admissions";
-    if (/(lunch|dietary|menu|meal)/.test(t))             return "lunch";
-    if (/(term|holiday|calendar|event)/.test(t))         return "calendar";
-    if (/(uniform|dress code)/.test(t))                  return "uniform";
-    if (/(bursary|scholarship)/.test(t))                 return "scholarships";
-    if (/(contact|email|phone|telephone)/.test(t))       return "contact";
-    if (/(academic|subject|learning)/.test(t))           return "academics";
-    if (/(sport|co-curricular|activity)/.test(t))        return "extracurricular";
-    if (/(policy|policies|safeguarding)/.test(t))        return "policies";
+    if (/(lunch|dietary|menu|meal)/.test(t)) return "lunch";
+    if (/(term|holiday|calendar|event)/.test(t)) return "calendar";
+    if (/(uniform|dress code)/.test(t)) return "uniform";
+    if (/(bursary|scholarship)/.test(t)) return "scholarships";
+    if (/(contact|email|phone|telephone)/.test(t)) return "contact";
+    if (/(academic|subject|learning)/.test(t)) return "academics";
+    if (/(sport|co-curricular|activity)/.test(t)) return "extracurricular";
+    if (/(policy|policies|safeguarding)/.test(t)) return "policies";
     return "admissions";
   }
 
@@ -148,23 +133,23 @@ document.addEventListener("DOMContentLoaded", () => {
     if (save) saveHistory("user", text, "user");
   }
 
-  // ─── Render bot/system/human message + dynamic buttons ───────
+  // ─── Render bot message + dynamic buttons ─────────────────────
   function renderBot(html, source, isWelcome = false, category = "admissions", save = true) {
     const d = document.createElement("div");
     d.className = `penai-message penai-${source}`;
-    const prefix = source === "system" ? "System:" : source === "human" ? "Human:" : "PEN.ai:";
+    const prefix = "More House Chatbot:";
     d.innerHTML = `<strong><span class="penai-prefix">${prefix}</span></strong> ${html}`;
     msgs.appendChild(d);
 
     if (source === "bot") {
-      const cats       = Object.keys(quickByCat);
-      const inCat      = quickByCat[category] || quickByCat.admissions;
-      const outCat     = cats.filter(c => c !== category).flatMap(c => quickByCat[c]);
-      const freshIn    = inCat.filter(b => !usedQueries.has(b.query));
-      const seenIn     = inCat.filter(b => usedQueries.has(b.query));
-      const freshOut   = outCat.filter(b => !usedQueries.has(b.query));
-      const seenOut    = outCat.filter(b => usedQueries.has(b.query));
-      const finalBtns  = freshIn.concat(freshOut, seenIn, seenOut).slice(0, 3);
+      const cats = Object.keys(quickByCat);
+      const inCat = quickByCat[category] || quickByCat.admissions;
+      const outCat = cats.filter(c => c !== category).flatMap(c => quickByCat[c]);
+      const freshIn = inCat.filter(b => !usedQueries.has(b.query));
+      const seenIn = inCat.filter(b => usedQueries.has(b.query));
+      const freshOut = outCat.filter(b => !usedQueries.has(b.query));
+      const seenOut = outCat.filter(b => usedQueries.has(b.query));
+      const finalBtns = freshIn.concat(freshOut, seenIn, seenOut).slice(0, 3);
 
       const wrp = document.createElement("div");
       wrp.className = "quick-replies";
@@ -183,7 +168,7 @@ document.addEventListener("DOMContentLoaded", () => {
     removeThinking();
     thinkingDiv = document.createElement("div");
     thinkingDiv.className = "penai-message penai-bot";
-    thinkingDiv.innerHTML = `<strong><span class="penai-prefix">PEN.ai:</span></strong> <em>PEN.ai is thinking…</em>`;
+    thinkingDiv.innerHTML = `<strong><span class="penai-prefix">More House Chatbot:</span></strong> <em>Thinking…</em>`;
     msgs.appendChild(thinkingDiv);
     msgs.scrollTop = msgs.scrollHeight;
   }
@@ -195,53 +180,25 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  // ─── Send question (with abort on close) ──────────────────────
-  async function sendQuestion(question, isWelcome = false) {
-    if (currentController) currentController.abort();
-    currentController = new AbortController();
-
+  // ─── Send question via SocketIO ───────────────────────────────
+  function sendQuestion(question, isWelcome = false) {
     if (!isWelcome) {
       renderUser(question);
       showThinking();
     }
 
-    try {
-      const res = await fetch(ASK_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question, session_id: sessionId }),
-        signal: currentController.signal
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      removeThinking();
-
-      sessionId = data.session_id;
-      usedQueries.add(question);
-      socket.emit("join", { session_id: sessionId });
-
-    } catch (err) {
-      if (err.name === "AbortError") {
-        removeThinking();
-      } else {
-        removeThinking();
-        renderBot(`Sorry, I couldn't process your request. (${err.message})`, "bot", false, "admissions");
-      }
-    } finally {
-      currentController = null;
-    }
+    socket.emit('message', { message: question, session_id: sessionId });
   }
 
   // ─── Toggle open/close ───────────────────────────────────────
   toggle.addEventListener("click", () => {
     const isOpen = chatbox.style.display === "flex";
     if (isOpen) {
-      if (currentController) currentController.abort();
       chatbox.style.display = "none";
     } else {
       chatbox.style.display = "flex";
       if (!welcomed) {
-        sendQuestion("__welcome__", true);
+        sendQuestion("Hello! How can I assist you with More House School today?", true);
         welcomed = true;
       } else {
         loadHistory();
@@ -257,6 +214,7 @@ document.addEventListener("DOMContentLoaded", () => {
       sendQuestion(msg, false);
     }
   });
+
   input.addEventListener("keypress", e => {
     if (e.key === "Enter" && input.value.trim()) {
       const msg = input.value.trim();
@@ -284,7 +242,7 @@ document.addEventListener("DOMContentLoaded", () => {
   document.addEventListener("mousemove", e => {
     if (dragging) {
       chatbox.style.left = `${e.clientX - offsetX}px`;
-      chatbox.style.top  = `${e.clientY - offsetY}px`;
+      chatbox.style.top = `${e.clientY - offsetY}px`;
     }
   });
   document.addEventListener("mouseup", () => { dragging = false; });
