@@ -1,77 +1,52 @@
-#!/usr/bin/env python3
+import eventlet
+eventlet.monkey_patch()  # Must be first to avoid monkey-patching errors
+
 import os
-import pickle
-import traceback
 import sqlite3
-import logging
-from datetime import date, datetime
-import pytz
+import pickle
 import numpy as np
-import openai
-from flask import Flask, request, jsonify, render_template
-from flask_cors import CORS, cross_origin
+from datetime import datetime
+import pytz
+from flask import Flask, render_template, request, jsonify
+from flask_cors import CORS
 from flask_socketio import SocketIO, emit
-from dotenv import load_dotenv
 from fuzzywuzzy import fuzz
-import uuid
+from openai import OpenAI
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+# Initialize Flask app
+app = Flask(__name__)
+CORS(app)
+socketio = SocketIO(app, async_mode='eventlet')
 
-# ─── Initialise ──────────────────────────────────────────────────────────────
-load_dotenv()
-openai.api_key = os.getenv("OPENAI_API_KEY")
-if not openai.api_key:
-    logger.error("OPENAI_API_KEY not set in .env")
-    raise RuntimeError("OPENAI_API_KEY not set in .env")
+# Configuration
+app.config['SECRET_KEY'] = os.urandom(24).hex()
+app.config['STATIC_FOLDER'] = 'static'
 
-app = Flask(__name__, static_folder='static', template_folder='templates')
-CORS(app, resources={r"/ask": {"origins": "*"}, r"/status": {"origins": "*"}})
-socketio = SocketIO(app, cors_allowed_origins="*")
-
-# ─── SQLite Database Setup ───────────────────────────────────────────────────
-def init_db():
-    db_path = '/tmp/db/flag.db'
-    db_dir = os.path.dirname(db_path)
-    
-    try:
-        if not os.path.exists(db_dir):
-            os.makedirs(db_dir, exist_ok=True)
-            os.chmod(db_dir, 0o775)
-            logger.info(f"Created directory {db_dir} with permissions 775")
-        else:
-            logger.info(f"Directory {db_dir} already exists")
-        
-        conn = sqlite3.connect(db_path)
-        c = conn.cursor()
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS chat_sessions (
-                session_id TEXT PRIMARY KEY,
-                question TEXT NOT NULL,
-                bot_response TEXT,
-                human_response TEXT,
-                status TEXT NOT NULL DEFAULT 'bot',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        conn.commit()
-        
-        os.chmod(db_path, 0o664)
-        logger.info(f"Set permissions for {db_path} to 664")
-        conn.close()
-        logger.info(f"Successfully initialized database at {db_path}")
-    except Exception as e:
-        logger.error(f"Error initializing database at {db_path}: {str(e)}")
-        raise
-
+# Load embeddings and metadata
 try:
-    init_db()
+    with open('./embeddings.pkl', 'rb') as f:
+        embeddings = np.stack(pickle.load(f), axis=0)
+    with open('./metadata.pkl', 'rb') as f:
+        metadata = pickle.load(f)
+    app.logger.info("Successfully loaded embeddings.pkl and metadata.pkl")
 except Exception as e:
-    logger.error(f"Failed to initialize database: {str(e)}")
+    app.logger.error(f"Error loading embeddings/metadata: {e}")
     raise
 
-# ─── URL lookup ───────────────────────────────────────────────────────────────
+# Initialize SQLite database
+try:
+    os.makedirs('/tmp/db', exist_ok=True, mode=0o775)
+    conn = sqlite3.connect('/tmp/db/flag.db')
+    conn.execute('''CREATE TABLE IF NOT EXISTS flagged_questions
+                   (session_id TEXT, question TEXT, timestamp TEXT)''')
+    conn.commit()
+    conn.close()
+    app.logger.info("Database initialized at /tmp/db/flag.db")
+except Exception as e:
+    app.logger.error(f"Error initializing database: {e}")
+    raise
+
+# URL lookup
 PAGE_LINKS = {
     "home": "https://www.morehouse.org.uk/",
     "homepage": "https://www.morehouse.org.uk/",
@@ -158,7 +133,7 @@ PAGE_LINKS = {
     "faith life": "https://www.morehouse.org.uk/beyond-the-classroom/faith-life/",
 }
 
-# ─── Human labels for fallback links ────────────────────────────────────────
+# Human labels for fallback links
 URL_LABELS = {
     PAGE_LINKS["enquiry"]: "More about Enquiries",
     PAGE_LINKS["fees"]: "More about Fees",
@@ -192,7 +167,7 @@ URL_LABELS = {
     "https://www.morehouse.org.uk/information/school-policies/": "More about Policies",
 }
 
-# ─── Static QAs ──────────────────────────────────────────────────────────────
+# Static QAs
 STATIC_QAS = {
     "enquiry": (
         "Please complete our enquiry form and we will tailor a prospectus exactly for you and your child.",
@@ -993,432 +968,104 @@ STATIC_QAS = {
     ),
 }
 
-# ─── Load embeddings & metadata ───────────────────────────────────────────────
-try:
-    with open("./embeddings.pkl", "rb") as f:
-        embeddings = np.stack(pickle.load(f), axis=0)
-    logger.info("Loaded embeddings.pkl")
-except Exception as e:
-    logger.error(f"Failed to load embeddings.pkl: {str(e)}")
-    raise
+# Sensitive keywords
+sensitive_keywords = ['bullying', 'abuse', 'harassment']
 
-try:
-    with open("./metadata.pkl", "rb") as f:
-        metadata = pickle.load(f)
-    logger.info("Loaded metadata.pkl")
-except Exception as e:
-    logger.error(f"Failed to load metadata.pkl: {str(e)}")
-    raise
-
-EMB_MODEL = "text-embedding-3-small"
-CHAT_MODEL = "gpt-3.5-turbo"
-
-# ─── System prompt ────────────────────────────────────────────────────────────
-today = date.today().isoformat()
-system_prompt = (
-    f"You are a friendly, professional assistant for More House School.\n"
-    f"Today's date is {today}.\n"
-    "Begin with 'Thank you for your question!' and end with 'Anything else I can help you with today?'.\n"
-    "If you do not know the answer, say 'I'm sorry, I don't have that information.'\n"
-    "Use British spelling."
-)
-
-# ─── Human takeover triggers ──────────────────────────────────────────────────
-SENSITIVE_KEYWORDS = ["bullying", "emergency", "harassment", "safeguarding issue", "complaint"]
-def needs_human_takeover(question, sim_score=None):
-    now = datetime.now(pytz.timezone("Europe/London"))
-    hour = now.hour
-    scheduled = 9 <= hour < 17
-    keyword_trigger = any(keyword in question.lower() for keyword in SENSITIVE_KEYWORDS)
-    low_confidence = sim_score is not None and sim_score < 0.7
-    return scheduled or keyword_trigger or low_confidence
-
-def cosine_similarities(matrix, vector):
-    dot = matrix @ vector
-    norms = np.linalg.norm(matrix, axis=1) * np.linalg.norm(vector)
-    return dot / (norms + 1e-8)
-
-def remove_bullets(text):
-    return " ".join(
-        line[2:].strip() if line.startswith("- ") else line.strip()
-        for line in text.split("\n")
-    )
-
-def format_response(ans, is_human=False):
-    footer = "Anything else I can help you with today?"
-    ans = ans.replace(footer, "").strip()
-    sents, paras, curr = ans.split(". "), [], []
-    for s in sents:
-        s = s.strip()
-        if not s:
-            continue
-        curr.append(s.rstrip("."))
-        if len(curr) >= 3 or s.endswith("?"):
-            paras.append(". ".join(curr) + ".")
-            curr = []
-    if curr:
-        paras.append(". ".join(curr) + ".")
-    if not is_human and (not paras or not paras[0].startswith("Thank you for your question")):
-        paras.insert(0, "Thank you for your question!")
-    paras.append(footer)
-    return "\n\n".join(paras)
-
-@app.route("/", methods=["GET"])
-def home():
+# RAG helper function
+def get_rag_response(question):
     try:
-        logger.info("Serving index.html")
-        return render_template("index.html")
-    except Exception as e:
-        logger.error(f"Error serving index.html: {str(e)}")
-        return jsonify(error="Failed to load homepage"), 500
+        client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+        # Generate question embedding
+        response = client.embeddings.create(input=question, model='text-embedding-3-small')
+        question_embedding = np.array(response.data[0].embedding)
 
-@app.route("/ask", methods=["POST"])
-@cross_origin()
-def ask():
-    try:
-        data = request.get_json(force=True)
-        question = data.get("question", "").strip()
-        session_id = data.get("session_id", str(uuid.uuid4()))
-        if not question:
-            logger.warning("No question provided in /ask")
-            return jsonify(error="No question provided"), 400
-
-        key = question.lower().rstrip("?")
-
-        conn = sqlite3.connect('/tmp/db/flag.db')
-        c = conn.cursor()
-        c.execute("SELECT status, human_response, bot_response FROM chat_sessions WHERE session_id = ?", (session_id,))
-        session = c.fetchone()
-        if session and session[0] == "human" and session[1]:
-            conn.close()
-            socketio.emit("human_response", {
-                "session_id": session_id,
-                "answer": format_response(session[1], is_human=True),
-                "url": None,
-                "link_label": None,
-                "source": "human"
-            }, room=session_id)
-            logger.info(f"Returning human response for session {session_id}")
-            return jsonify(
-                answer=format_response(session[1], is_human=True),
-                url=None,
-                link_label=None,
-                source="human",
-                session_id=session_id
-            ), 200
-        elif session and session[0] == "pending":
-            conn.close()
-            socketio.emit("system_alert", {
-                "session_id": session_id,
-                "answer": "Your question has been flagged for human review. A member of our team will respond soon.",
-                "url": None,
-                "link_label": None,
-                "source": "system"
-            }, room=session_id)
-            logger.info(f"Session {session_id} is pending human review")
-            return jsonify(
-                answer="Your question has been flagged for human review. A member of our team will respond soon.",
-                url=None,
-                link_label=None,
-                source="system",
-                session_id=session_id
-            ), 200
-
-        if key in STATIC_QAS:
-            raw, url, label = STATIC_QAS[key]
-            c.execute(
-                "INSERT OR REPLACE INTO chat_sessions (session_id, question, bot_response, status) VALUES (?, ?, ?, ?)",
-                (session_id, question, raw, "bot")
-            )
-            conn.commit()
-            conn.close()
-            socketio.emit("bot_response", {
-                "session_id": session_id,
-                "answer": format_response(remove_bullets(raw)),
-                "url": url,
-                "link_label": label,
-                "source": "bot"
-            }, room=session_id)
-            logger.info(f"Answered with exact static QA for session {session_id}")
-            return jsonify(
-                answer=format_response(remove_bullets(raw)),
-                url=url,
-                link_label=label,
-                source="bot",
-                session_id=session_id
-            ), 200
-
-        for sk, (raw, url, label) in STATIC_QAS.items():
-            if fuzz.partial_ratio(sk, key) > 80:
-                c.execute(
-                    "INSERT OR REPLACE INTO chat_sessions (session_id, question, bot_response, status) VALUES (?, ?, ?, ?)",
-                    (session_id, question, raw, "bot")
-                )
-                conn.commit()
-                conn.close()
-                socketio.emit("bot_response", {
-                    "session_id": session_id,
-                    "answer": format_response(remove_bullets(raw)),
-                    "url": url,
-                    "link_label": label,
-                    "source": "bot"
-                }, room=session_id)
-                logger.info(f"Answered with fuzzy static QA for session {session_id}")
-                return jsonify(
-                    answer=format_response(remove_bullets(raw)),
-                    url=url,
-                    link_label=label,
-                    source="bot",
-                    session_id=session_id
-                ), 200
-
-        if question == "__welcome__":
-            raw = (
-                "Hi there! Ask me anything about More House School.\n\n"
-                "We tailor our prospectus to your enquiry. For more details, visit below.\n\n"
-                "Anything else I can help you with today?"
-            )
-            c.execute(
-                "INSERT OR REPLACE INTO chat_sessions (session_id, question, bot_response, status) VALUES (?, ?, ?, ?)",
-                (session_id, question, raw, "bot")
-            )
-            conn.commit()
-            conn.close()
-            socketio.emit("bot_response", {
-                "session_id": session_id,
-                "answer": remove_bullets(raw),
-                "url": PAGE_LINKS["enquiry"],
-                "link_label": "Enquire now",
-                "source": "bot"
-            }, room=session_id)
-            logger.info(f"Sent welcome message for session {session_id}")
-            return jsonify(
-                answer=remove_bullets(raw),
-                url=PAGE_LINKS["enquiry"],
-                link_label="Enquire now",
-                source="bot",
-                session_id=session_id
-            ), 200
-
-        if key.startswith("how many"):
-            raw = "I'm sorry, I don't have that information."
-            c.execute(
-                "INSERT OR REPLACE INTO chat_sessions (session_id, question, bot_response, status) VALUES (?, ?, ?, ?)",
-                (session_id, question, raw, "bot")
-            )
-            conn.commit()
-            conn.close()
-            socketio.emit("bot_response", {
-                "session_id": session_id,
-                "answer": format_response(raw),
-                "url": None,
-                "link_label": None,
-                "source": "bot"
-            }, room=session_id)
-            logger.info(f"Guarded 'how many' question for session {session_id}")
-            return jsonify(
-                answer=format_response(raw),
-                url=None,
-                link_label=None,
-                source="bot",
-                session_id=session_id
-            ), 200
-
-        relevant_url = None
-        for k, u in PAGE_LINKS.items():
-            if k in key or any(
-                fuzz.partial_ratio(k, w) > 80 for w in key.split() if len(w) > 3
-            ):
-                relevant_url = u
-                break
-
-        emb = openai.embeddings.create(model=EMB_MODEL, input=question)
-        q_vec = np.array(emb.data[0].embedding, dtype="float32")
-        sims = cosine_similarities(embeddings, q_vec)
-        top_idx = sims.argmax()
-        top_sim = sims[top_idx]
-        contexts = [metadata[i]["text"] for i in sims.argsort()[-20:][::-1]]
-        prompt = "Use these passages:\n\n" + "\n---\n".join(contexts)
-        prompt += f"\n\nQuestion: {question}\nAnswer:"
-        chat = openai.chat.completions.create(
-            model=CHAT_MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt},
-            ],
+        # Cosine similarity
+        similarities = np.dot(embeddings, question_embedding) / (
+            np.linalg.norm(embeddings, axis=1) * np.linalg.norm(question_embedding)
         )
-        raw = chat.choices[0].message.content
-
-        if needs_human_takeover(question, top_sim):
-            c.execute(
-                "INSERT OR REPLACE INTO chat_sessions (session_id, question, bot_response, status) VALUES (?, ?, ?, ?)",
-                (session_id, question, raw, "pending")
-            )
-            conn.commit()
-            conn.close()
-            logger.info(f"Flagged question for human review: session {session_id}, question: {question}")
-            socketio.emit("system_alert", {
-                "session_id": session_id,
-                "answer": "Your question has been flagged for human review. A member of our team will respond soon.",
-                "url": None,
-                "link_label": None,
-                "source": "system"
-            }, room=session_id)
-            return jsonify(
-                answer="Your question has been flagged for human review. A member of our team will respond soon.",
-                url=None,
-                link_label=None,
-                source="system",
-                session_id=session_id
-            ), 200
-
-        c.execute(
-            "INSERT OR REPLACE INTO chat_sessions (session_id, question, bot_response, status) VALUES (?, ?, ?, ?)",
-            (session_id, question, raw, "bot")
-        )
-        conn.commit()
-        conn.close()
-
-        answer = format_response(remove_bullets(raw))
-        if not relevant_url and top_idx:
-            relevant_url = metadata[top_idx].get("url")
-        link_label = URL_LABELS.get(relevant_url)
-
-        socketio.emit("bot_response", {
-            "session_id": session_id,
-            "answer": answer,
-            "url": relevant_url,
-            "link_label": link_label,
-            "source": "bot"
-        }, room=session_id)
-        logger.info(f"Answered with RAG for session {session_id}")
-        return jsonify(
-            answer=answer,
-            url=relevant_url,
-            link_label=link_label,
-            source="bot",
-            session_id=session_id
-        ), 200
-
+        best_idx = np.argmax(similarities)
+        if similarities[best_idx] > 0.7:  # Threshold
+            return metadata[best_idx].get('text', 'No relevant information found.')
+        return "Sorry, I couldn't find a relevant answer."
     except Exception as e:
-        logger.error(f"Error in /ask: {str(e)}")
-        traceback.print_exc()
-        return jsonify(error=str(e)), 500
+        app.logger.error(f"RAG error: {e}")
+        return "Error processing question."
 
-@app.route("/status", methods=["POST"])
-@cross_origin()
-def status():
+# Routes
+@app.route('/')
+def index():
     try:
-        data = request.get_json(force=True)
-        session_id = data.get("session_id")
-        if not session_id:
-            logger.warning("No session_id provided in /status")
-            return jsonify(error="No session_id provided"), 400
-        conn = sqlite3.connect('/tmp/db/flag.db')
-        c = conn.cursor()
-        c.execute("SELECT status, human_response, bot_response FROM chat_sessions WHERE session_id = ?", (session_id,))
-        session = c.fetchone()
-        conn.close()
-        if not session:
-            logger.warning(f"Session {session_id} not found")
-            return jsonify(error="Session not found"), 404
-        status, human_response, bot_response = session
-        if status == "human" and human_response:
-            socketio.emit("human_response", {
-                "session_id": session_id,
-                "answer": format_response(human_response, is_human=True),
-                "url": None,
-                "link_label": None,
-                "source": "human"
-            }, room=session_id)
-            logger.info(f"Returned human response for session {session_id}")
-            return jsonify(
-                answer=format_response(human_response, is_human=True),
-                url=None,
-                link_label=None,
-                source="human",
-                session_id=session_id
-            ), 200
-        elif status == "pending":
-            socketio.emit("system_alert", {
-                "session_id": session_id,
-                "answer": "Your question is still under human review. Please check back soon.",
-                "url": None,
-                "link_label": None,
-                "source": "system"
-            }, room=session_id)
-            logger.info(f"Session {session_id} is pending review")
-            return jsonify(
-                answer="Your question is still under human review. Please check back soon.",
-                url=None,
-                link_label=None,
-                source="system",
-                session_id=session_id
-            ), 200
-        else:
-            logger.info(f"Returned bot response for session {session_id}")
-            return jsonify(
-                answer=format_response(bot_response),
-                url=None,
-                link_label=None,
-                source="bot",
-                session_id=session_id
-            ), 200
+        return app.send_static_file('index.html')
     except Exception as e:
-        logger.error(f"Error in /status: {str(e)}")
-        traceback.print_exc()
-        return jsonify(error=str(e)), 500
+        app.logger.error(f"Error serving index.html: {e}")
+        return jsonify({'error': 'Failed to load page'}), 500
 
-@app.route("/review", methods=["GET", "POST"])
+@app.route('/review', methods=['GET', 'POST'])
 def review():
     try:
         conn = sqlite3.connect('/tmp/db/flag.db')
-        c = conn.cursor()
-        if request.method == "GET":
-            c.execute("SELECT session_id, question, status, human_response FROM chat_sessions WHERE status = 'pending'")
-            sessions = c.fetchall()
-            conn.close()
-            logger.info("Served review.html with pending sessions")
-            return render_template("review.html", sessions=sessions)
-        else:
-            data = request.form
-            session_id = data.get("session_id")
-            human_response = data.get("human_response")
+        if request.method == 'POST':
+            session_id = request.form.get('session_id')
+            human_response = request.form.get('human_response')
             if not session_id or not human_response:
                 conn.close()
-                logger.warning("Missing session_id or human_response in /review POST")
-                return jsonify(error="Missing session_id or human_response"), 400
-            c.execute(
-                "UPDATE chat_sessions SET human_response = ?, status = ? WHERE session_id = ?",
-                (human_response, "human", session_id)
-            )
+                return jsonify({'error': 'Missing data'}), 400
+            # Log response (extend as needed)
+            conn.execute("DELETE FROM flagged_questions WHERE session_id = ?", (session_id,))
             conn.commit()
             conn.close()
-            socketio.emit("human_response", {
-                "session_id": session_id,
-                "answer": format_response(human_response, is_human=True),
-                "url": None,
-                "link_label": None,
-                "source": "human"
-            }, room=session_id)
-            logger.info(f"Submitted human response for session {session_id}")
-            return jsonify(success="Response submitted"), 200
+            return jsonify({'status': 'Response submitted'})
+        cursor = conn.execute("SELECT session_id, question FROM flagged_questions")
+        sessions = cursor.fetchall()
+        conn.close()
+        return render_template('review.html', sessions=sessions)
     except Exception as e:
-        logger.error(f"Error in /review: {str(e)}")
-        traceback.print_exc()
-        return jsonify(error=str(e)), 500
+        app.logger.error(f"Review error: {e}")
+        return jsonify({'error': 'Server error'}), 500
 
-@socketio.on("connect")
-def handle_connect():
-    logger.info("Client connected")
+# SocketIO handler
+@socketio.on('message')
+def handle_message(data):
+    try:
+        question = data.get('message', '').strip()
+        session_id = data.get('session_id', '')
+        if not question or not session_id:
+            emit('response', {'message': 'Invalid input'})
+            return
 
-@socketio.on("join")
-def handle_join(data):
-    session_id = data.get("session_id")
-    if session_id:
-        logger.info(f"Client joined room: {session_id}")
-        emit("joined", {"session_id": session_id}, room=session_id)
+        # Check BST time for human review
+        bst = pytz.timezone('Europe/London')
+        current_time = datetime.now(bst)
+        current_hour = current_time.hour
 
-if __name__ == "__main__":
-    logger.info("Starting Flask-SocketIO server")
-    socketio.run(app, host="0.0.0.0", port=5000)
+        # Handle sensitive questions
+        if any(keyword in question.lower() for keyword in sensitive_keywords):
+            if 9 <= current_hour < 17:
+                conn = sqlite3.connect('/tmp/db/flag.db')
+                conn.execute("INSERT INTO flagged_questions (session_id, question, timestamp) VALUES (?, ?, ?)",
+                             (session_id, question, current_time.isoformat()))
+                conn.commit()
+                conn.close()
+                emit('response', {'message': 'Question flagged for human review.'})
+                return
+
+        # Static QA
+        for q, (answer, link, label) in STATIC_QAS.items():
+            if fuzz.ratio(question.lower(), q.lower()) > 80:
+                response = answer
+                if link:
+                    response += f' <a href="{link}" target="_blank">{label}</a>'
+                emit('response', {'message': response})
+                return
+
+        # RAG response
+        response = get_rag_response(question)
+        emit('response', {'message': response})
+
+    except Exception as e:
+        app.logger.error(f"SocketIO error: {e}")
+        emit('response', {'message': 'Server error'})
+
+# Main entry point
+if __name__ == '__main__':
+    socketio.run(app, host='0.0.0.0', port=10000, debug=False)
