@@ -1,35 +1,23 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Human Review - More House Chatbot</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 20px; }
-        table { border-collapse: collapse; width: 100%; margin-bottom: 20px; }
-        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-        th { background-color: #f2f2f2; }
-        form { margin-top: 20px; }
-        label { display: block; margin-bottom: 5px; }
-        input, textarea { width: 100%; padding: 8px; margin-bottom: 10px; }
-        button { padding: 10px 20px; background-color: #4CAF50; color: white; border: none; cursor: pointer; }
-        button:hover { background-color: #45a049; }
-    </style>
+    <title>Human Review</title>
 </head>
 <body>
-    <h1>Flagged Questions for Review</h1>
+    <h1>Flagged Questions</h1>
     {% if sessions %}
-    <table>
-        <tr><th>Session ID</th><th>Question</th></tr>
-        {% for session in sessions %}
-        <tr><td>{{ session[0] }}</td><td>{{ session[1] }}</td></tr>
-        {% endfor %}
-    </table>
+    <ul>
+      {% for session in sessions %}
+        <li><strong>{{ session[0] }}</strong>: {{ session[1] }}</li>
+      {% endfor %}
+    </ul>
     <form method="POST">
-        <label>Session ID: <input type="text" name="session_id" placeholder="Enter Session ID"></label>
-        <label>Response: <textarea name="human_response" placeholder="Enter your response" rows="4"></textarea></label>
-        <button type="submit">Submit Response</button>
+        <input name="session_id" placeholder="Session ID">
+        <textarea name="human_response" placeholder="Response"></textarea>
+        <button type="submit">Submit</button>
     </form>
     {% else %}
-    <p>No pending questions for review.</p>
+    <p>No flagged questions.</p>
     {% endif %}
 </body>
 </html>
