@@ -1,6 +1,3 @@
-import multiprocessing
-
-bind = "0.0.0.0:10000"
-workers = multiprocessing.cpu_count() * 2 + 1
+workers = 2  # Reduced for 512 MB limit
 worker_class = "eventlet"
-timeout = 30
+bind = "0.0.0.0:10000"
