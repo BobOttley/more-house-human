@@ -1003,25 +1003,17 @@ def get_rag_response(question):
         return "Error processing question."
 
 # Routes
-@app.route('/')
-def index():
-    try:
-        return app.send_static_file('index.html')
-    except Exception as e:
-        app.logger.error(f"Error serving index.html: {e}")
-        return jsonify({'error': 'Failed to load page'}), 500
-
 @app.route('/review', methods=['GET', 'POST'])
 def review():
     try:
-        conn = sqlite3.connect('/tmp/db/flag.db')
+        conn = sqlite3.connect('flag.db')  # ✅ Local DB file
         if request.method == 'POST':
             session_id = request.form.get('session_id')
             human_response = request.form.get('human_response')
             if not session_id or not human_response:
                 conn.close()
                 return jsonify({'error': 'Missing data'}), 400
-            # Log response (extend as needed)
+            # ✅ Optional: Log the human response elsewhere if needed
             conn.execute("DELETE FROM flagged_questions WHERE session_id = ?", (session_id,))
             conn.commit()
             conn.close()
